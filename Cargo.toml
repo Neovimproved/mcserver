@@ -1,0 +1,9 @@
+[package]
+name = "mcserver-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+nix = { version = "0.31.3", features = ["fs", "poll", "process", "term"] }
+vte = "0.15.0"
