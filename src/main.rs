@@ -1,29 +1,26 @@
-#![allow(unused)]
 use std::{
     borrow::Cow,
     env,
-    ffi::{CString, NulError},
-    fs::File,
-    os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
-    slice, thread,
+    ffi::CString,
+    io::{self, Write},
+    os::fd::{AsFd, OwnedFd},
+    sync::mpsc::{TryRecvError, channel},
+    thread,
 };
 
 use anyhow::Context;
 use nix::{
-    pty::{ForkptyResult, forkpty, openpty},
-    sys::termios::{LocalFlags, OutputFlags, SetArg, tcgetattr, tcsetattr},
+    errno::Errno,
+    libc,
+    pty::{ForkptyResult, forkpty},
+    sys::{
+        termios::{LocalFlags, SetArg, tcgetattr, tcsetattr},
+        wait::{WaitStatus, waitpid},
+    },
     unistd::{Pid, execvp, read, write},
 };
-use tokio::{
-    io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    select,
-    sync::{
-        mpsc::channel,
-        oneshot::{self, error::RecvError},
-    },
-};
 
-async fn log_bytes(bytes: &[u8]) -> io::Result<()> {
+fn log_bytes(bytes: &[u8]) -> io::Result<()> {
     let contents = match str::from_utf8(bytes) {
         Ok(s) => Cow::Borrowed(s),
         Err(err) => {
@@ -33,43 +30,52 @@ async fn log_bytes(bytes: &[u8]) -> io::Result<()> {
     };
 
     print!("Read this: {contents}");
-    io::stdout().flush().await?;
+    io::stdout().flush()?;
 
     Ok(())
 }
 
-async fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
+fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
     let mut buf = [0; 1024];
 
-    let (tx, mut rx) = oneshot::channel::<()>();
+    let (tx, rx) = channel();
 
-    let master_fd = master.try_clone()?;
+    let writer_master_fd = master.try_clone()?;
 
-    let mut t_settings = tcgetattr(master_fd.as_fd())?;
+    let mut t_settings = tcgetattr(writer_master_fd.as_fd())?;
     t_settings.local_flags.remove(LocalFlags::ECHO);
-    tcsetattr(master.as_fd(), SetArg::TCSANOW, &t_settings);
+    tcsetattr(master.as_fd(), SetArg::TCSANOW, &t_settings)?;
 
-    let handle = tokio::spawn(async move {
+    let handle = thread::spawn(move || -> anyhow::Result<()> {
         loop {
-            let mut buf = String::new();
-            let mut stdin = BufReader::new(io::stdin());
+            use std::os::fd::AsRawFd;
 
-            select! {
-                biased;
-                res = &mut rx => match res {
-                    Ok(()) => {
-                        return Ok(())
-                    },
-                    Err(_) => {
-                        eprintln!("Unexpected error!");
-                        return Ok(());
-                    },
-                },
-                res = stdin.read_line(&mut buf) => {
-                    res?;
-                    write(master_fd.as_fd(), buf.as_bytes());
-                }
+            let mut pfd = libc::pollfd {
+                fd: std::io::stdin().as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
             };
+
+            let ret = unsafe { libc::poll(&mut pfd, 1, 0) };
+
+            if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
+                let mut buf = String::new();
+                io::stdin().read_line(&mut buf)?;
+
+                if write(writer_master_fd.as_fd(), buf.as_bytes())? == 0 {
+                    eprintln!("Failed to write");
+                    return Ok(());
+                }
+            } else {
+                match rx.try_recv() {
+                    Ok(()) => break,
+                    Err(TryRecvError::Empty) => {}
+                    Err(TryRecvError::Disconnected) => {
+                        eprintln!("Unexpected disconnect");
+                        break;
+                    }
+                };
+            }
         }
 
         Ok::<(), anyhow::Error>(())
@@ -79,53 +85,57 @@ async fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
         match read(master.as_fd(), &mut buf) {
             Ok(count) => {
                 if count > 0 {
-                    log_bytes(&buf[..count]).await?;
+                    log_bytes(&buf[..count])?;
                 } else {
                     println!("Stream finished");
-                    tx.send(());
+                    tx.send(())?;
                     break;
                 }
             }
             Err(err) => {
-                eprintln!("Failed to read from master with err: {err}");
-                tx.send(());
+                if err != Errno::EIO {
+                    eprintln!("Failed to read from master with err: {err}");
+                }
+                tx.send(())?;
                 break;
             }
         }
     }
 
-    handle.await?;
+    handle.join().expect("Failed to join handle")?;
+
+    match waitpid(child, None)? {
+        WaitStatus::Exited(_, _) => {} // graceful exit
+        WaitStatus::Signaled(_, signal, _) => eprintln!("Child killed by signal {signal:?}"),
+        status => println!("Child status: {status:?}"),
+    }
 
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let pty = openpty(None, None)?;
-
-    let master_fd = pty.master;
-    let slave_fd = pty.slave;
-
+fn main() -> anyhow::Result<()> {
     match unsafe { forkpty(None, None)? } {
         ForkptyResult::Child => {
             let mut args = env::args();
             args.next(); // remove the executable name
 
             let program = args.next().context("Expected an argument")?;
-            println!("\x1b[0mStarting {program} now");
 
             let path = CString::new(program)?;
 
             let mut program_args = vec![path.clone()];
 
-            args.try_for_each(|arg| -> Result<(), NulError> {
+            for arg in args {
                 program_args.push(CString::new(arg)?);
-                Ok(())
-            })?;
+            }
 
-            execvp(&path, &program_args);
+            program_args.iter().for_each(|arg| {
+                print!("{arg:?} ");
+            });
+
+            execvp(&path, &program_args)?;
         }
-        ForkptyResult::Parent { child, master } => parent_process(child, master).await?,
+        ForkptyResult::Parent { child, master } => parent_process(child, master)?,
     };
 
     Ok(())
