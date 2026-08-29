@@ -4,21 +4,26 @@ use std::{
     env,
     ffi::{CString, NulError},
     fs::File,
-    io::{self, BufRead, BufWriter, Write},
     os::fd::{AsFd, AsRawFd, FromRawFd, IntoRawFd, OwnedFd},
-    slice,
-    sync::mpsc::{TryRecvError, channel},
-    thread,
+    slice, thread,
 };
 
 use anyhow::Context;
 use nix::{
     pty::{ForkptyResult, forkpty, openpty},
-    sys::termios::tcgetattr,
+    sys::termios::{LocalFlags, OutputFlags, SetArg, tcgetattr, tcsetattr},
     unistd::{Pid, execvp, read, write},
 };
+use tokio::{
+    io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
+    select,
+    sync::{
+        mpsc::channel,
+        oneshot::{self, error::RecvError},
+    },
+};
 
-fn log_bytes(bytes: &[u8]) -> io::Result<()> {
+async fn log_bytes(bytes: &[u8]) -> io::Result<()> {
     let contents = match str::from_utf8(bytes) {
         Ok(s) => Cow::Borrowed(s),
         Err(err) => {
@@ -28,43 +33,53 @@ fn log_bytes(bytes: &[u8]) -> io::Result<()> {
     };
 
     print!("Read this: {contents}");
-    io::stdout().flush()?;
+    io::stdout().flush().await?;
 
     Ok(())
 }
 
-fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
+async fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
     let mut buf = [0; 1024];
 
-    let (tx, rx) = channel();
+    let (tx, mut rx) = oneshot::channel::<()>();
 
     let master_fd = master.try_clone()?;
 
-    let handle = thread::spawn(move || -> anyhow::Result<()> {
-        let mut t_settings = tcgetattr(master_fd.as_fd())?;
+    let mut t_settings = tcgetattr(master_fd.as_fd())?;
+    t_settings.local_flags.remove(LocalFlags::ECHO);
+    tcsetattr(master.as_fd(), SetArg::TCSANOW, &t_settings);
 
-        while match rx.try_recv() {
-            Ok(()) => false,
-            Err(TryRecvError::Empty) => true,
-            Err(TryRecvError::Disconnected) => {
-                eprintln!("Unexpected disconnect");
-                false
-            }
-        } {
+    let handle = tokio::spawn(async move {
+        loop {
             let mut buf = String::new();
-            io::stdin().read_line(&mut buf);
+            let mut stdin = BufReader::new(io::stdin());
 
-            write(master_fd.as_fd(), buf.as_bytes());
+            select! {
+                biased;
+                res = &mut rx => match res {
+                    Ok(()) => {
+                        return Ok(())
+                    },
+                    Err(_) => {
+                        eprintln!("Unexpected error!");
+                        return Ok(());
+                    },
+                },
+                res = stdin.read_line(&mut buf) => {
+                    res?;
+                    write(master_fd.as_fd(), buf.as_bytes());
+                }
+            };
         }
 
-        Ok(())
+        Ok::<(), anyhow::Error>(())
     });
 
     loop {
         match read(master.as_fd(), &mut buf) {
             Ok(count) => {
                 if count > 0 {
-                    log_bytes(&buf[..count])?;
+                    log_bytes(&buf[..count]).await?;
                 } else {
                     println!("Stream finished");
                     tx.send(());
@@ -79,12 +94,13 @@ fn parent_process(child: Pid, master: OwnedFd) -> anyhow::Result<()> {
         }
     }
 
-    handle.join().expect("Failed to join handle");
+    handle.await?;
 
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let pty = openpty(None, None)?;
 
     let master_fd = pty.master;
@@ -109,7 +125,7 @@ fn main() -> anyhow::Result<()> {
 
             execvp(&path, &program_args);
         }
-        ForkptyResult::Parent { child, master } => parent_process(child, master)?,
+        ForkptyResult::Parent { child, master } => parent_process(child, master).await?,
     };
 
     Ok(())

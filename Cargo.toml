@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 nix = { version = "0.31.3", features = ["fs", "poll", "process", "term"] }
+tokio = { version = "1.53.1", features = ["full"] }
 vte = "0.15.0"
