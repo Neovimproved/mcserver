@@ -1,0 +1,12 @@
+[package]
+name = "mcserver-daemon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+color-eyre = { workspace = true }
+const_format = "0.2.36"
+daemonize2 = "0.7.0"
+mcserver-core = { workspace = true }
+tokio = { workspace = true }
+vte = "0.15.0"

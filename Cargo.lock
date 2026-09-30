@@ -190,12 +190,26 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcserver-tui"
+name = "mcserver"
+version = "0.1.0"
+dependencies = [
+ "color-eyre",
+ "mcserver-core",
+ "tokio",
+]
+
+[[package]]
+name = "mcserver-core"
+version = "0.1.0"
+
+[[package]]
+name = "mcserver-daemon"
 version = "0.1.0"
 dependencies = [
  "color-eyre",
  "const_format",
  "daemonize2",
+ "mcserver-core",
  "tokio",
  "vte",
 ]

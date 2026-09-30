@@ -1,0 +1,9 @@
+[package]
+name = "mcserver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+color-eyre = { workspace = true }
+tokio = { workspace = true }
+mcserver-core = { workspace = true }
