@@ -2,3 +2,8 @@
 name = "mcserver-core"
 version = "0.1.0"
 edition = "2024"
+
+[dependencies]
+bitcode = { workspace = true }
+derive_more = { version = "2.1.1", features = ["display"] }
+const_format = { workspace = true }

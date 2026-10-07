@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bitcode = { workspace = true }
 color-eyre = { workspace = true }
-const_format = "0.2.36"
+const_format = { workspace = true }
 daemonize2 = "0.7.0"
 mcserver-core = { workspace = true }
 tokio = { workspace = true }

@@ -1,26 +1,35 @@
 mod runtime;
 
-use std::fs::{self, File};
+use std::{
+    env,
+    fs::{self, File},
+};
 
 use color_eyre::eyre::Context;
 use const_format::formatcp;
 use daemonize2::Daemonize;
+use mcserver_core::*;
 use tokio::runtime::Runtime;
-
-const DAEMON_DIR: &str = "/tmp/mcserver";
-const PID_FILE_PATH: &str = formatcp!("{DAEMON_DIR}/process.pid");
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
 
-    fs::create_dir_all(DAEMON_DIR).wrap_err("Failed to create daemon directory")?;
+    fs::create_dir_all(TEMP_DIR).wrap_err("Failed to create daemon directory")?;
 
-    let stdout = File::create(formatcp!("{DAEMON_DIR}/daemon.out"))?;
-    let stderr = File::create(formatcp!("{DAEMON_DIR}/daemon.err"))?;
+    if let Some(arg) = env::args().nth(1)
+        && arg == "no"
+    {
+        // no daemonize
+        Runtime::new()?.block_on(runtime::main())?;
+        return Ok(());
+    }
+
+    let stdout = File::create(formatcp!("{TEMP_DIR}/daemon.out"))?;
+    let stderr = File::create(formatcp!("{TEMP_DIR}/daemon.err"))?;
 
     let daemonize = Daemonize::new()
         .pid_file(PID_FILE_PATH) // Every method except `new` and `start`
-        .working_directory(DAEMON_DIR) // for default behaviour.
+        .working_directory(TEMP_DIR) // for default behaviour.
         .user("nobody")
         .group("nogroup")
         .umask(0o777)

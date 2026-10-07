@@ -3,6 +3,8 @@ resolver = "3"
 members = ["daemon", "cli", "core"]
 
 [workspace.dependencies]
+bitcode = "0.6.9"
 color-eyre = "0.6.5"
+const_format = "0.2.36"
 tokio = { version = "1.53.1", features = ["full"] }
 mcserver-core = { path = "core" }
