@@ -25,11 +25,14 @@ pub enum ServerMessage {
     #[display("Message from server: {_0}")]
     Message(String),
 
-    #[display("A server has not yet been created, so you cannot interact with one yet")]
-    ServerNotStarted,
-
     #[display("A server has already started")]
-    ServerAlreadyStarted,
+    AlreadyStarted,
+
+    #[display("A server has not yet been created, so you cannot interact with one yet")]
+    NotStarted,
+
+    #[display("Output from the server: {}", display_bytes(_0))]
+    Output(Vec<u8>),
 }
 
 #[derive(Debug, Decode, Display, Encode)]
@@ -42,4 +45,36 @@ pub enum ClientMessage {
 
     #[display("Program input: {}", display_bytes(_0))]
     ProgramInput(Vec<u8>),
+}
+
+#[macro_export]
+macro_rules! write_message {
+    ($writer:ident, $message:expr) => {
+        async {
+            let encoded_message = bitcode::encode(&$message);
+            $writer.write_u32(encoded_message.len() as u32).await?;
+            $writer.write_all(&encoded_message).await?;
+
+            color_eyre::Result::<()>::Ok(())
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! read_message {
+    ($t:ty, $reader:ident) => {
+        async {
+            let length = $reader.read_u32().await?;
+            read_message!($t, $reader, length).await
+        }
+    };
+
+    ($t:ty, $reader:ident, $length:ident) => {
+        async {
+            let mut buf = vec![0u8; $length as usize];
+            $reader.read_exact(&mut buf).await?;
+
+            color_eyre::Result::<$t>::Ok(bitcode::decode(&buf)?)
+        }
+    };
 }

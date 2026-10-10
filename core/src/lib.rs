@@ -1,6 +1,6 @@
 mod consts;
-mod message;
+mod interface;
 
-pub use message::{ClientMessage, ServerMessage};
+pub use interface::{ClientMessage, ServerMessage};
 
 pub use consts::*;

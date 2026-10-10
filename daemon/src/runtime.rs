@@ -1,6 +1,6 @@
 use std::process::Stdio;
 
-use color_eyre::eyre::Context;
+use color_eyre::eyre::{Context, eyre};
 use mcserver_core::*;
 use tokio::{
     fs,
@@ -11,75 +11,84 @@ use tokio::{
 };
 
 async fn handle_server_child(
-    mut child: Child,
-    mut reader: impl AsyncReadExt + Unpin,
-    mut writer: impl AsyncWriteExt + Unpin,
+    child: &mut Child,
+    mut client_reader: impl AsyncReadExt + Unpin,
+    mut client_writer: impl AsyncWriteExt + Unpin,
 ) -> color_eyre::Result<()> {
-    loop {
-        let mut buf = [0u8; 1024];
+    let mut child_stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("Unable to take stdin from child"))?;
 
-        let count = select! {
-            count = reader.read(&mut buf) => count?,
+    let mut child_stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| eyre!("Unable to take stdout from child"))?;
+
+    loop {
+        let mut child_stdout_buf = vec![0u8; 1024];
+
+        let client_message_length = select! {
+            res = client_reader.read_u32() => {
+                match res {
+                    Ok(len) => len as usize,
+                    Err(err) => match err.kind() {
+                        io::ErrorKind::UnexpectedEof => break,
+                        _ => return Err(err).wrap_err("Failed to read from client"),
+                    }
+                }
+            },
             res = child.wait() => {
                 res?;
                 break;
             },
+            res = child_stdout.read(&mut child_stdout_buf) => {
+                res?;
+                write_message!(client_writer, ServerMessage::Output(child_stdout_buf)).await?;
+                continue;
+            }
         };
 
-        if count == 0 {
+        if client_message_length == 0 {
+            println!("EOL");
             break;
         }
 
-        let message: ClientMessage = bitcode::decode(&buf[..count])?;
+        if client_message_length > MAX_MESSAGE_LENGTH {
+            println!("Too long");
+            return Err(eyre!("The user sent a message that was too long"));
+        }
 
-        println!("Received: {message}");
+        let message = read_message!(ClientMessage, client_reader, client_message_length).await?;
+
+        println!("Received {message}");
 
         let initial_response =
             ServerMessage::Message("That's nice buddy. I'll handle your message rq".to_string());
 
-        writer
-            .write_all(&bitcode::encode(&initial_response))
-            .await?;
+        write_message!(client_writer, initial_response).await?;
 
-        if let Some(response) = match message {
-            ClientMessage::Start { name: _, flags: _ } => Some(ServerMessage::ServerNotStarted),
+        match message {
+            ClientMessage::Start { name: _, flags: _ } => {
+                write_message!(client_writer, ServerMessage::AlreadyStarted).await?;
+            }
             ClientMessage::Kill => match child.kill().await {
                 Ok(()) => {
-                    writer
-                        .write_all(&bitcode::encode(&ServerMessage::KillSuccess))
-                        .await?;
+                    write_message!(client_writer, ServerMessage::KillSuccess).await?;
                     break;
                 }
-                Err(err) => Some(ServerMessage::KillFailure(err.to_string())),
+                Err(err) => {
+                    write_message!(client_writer, ServerMessage::KillFailure(err.to_string()))
+                        .await?
+                }
             },
             ClientMessage::ProgramInput(bytes) => {
-                if bytes.is_empty() {
-                    println!("Schemed");
-                    continue;
-                }
-                println!("Program input type but is there a child?");
-
-                if let Some(stdin) = child.stdin.as_mut() {
-                    println!("Feeding...");
-                    stdin.write_all(&bytes).await?;
-                } else {
-                    println!(
-                        "stdin: {}; stdout: {}",
-                        if child.stdin.is_some() { "yep" } else { "nope" },
-                        if child.stdout.is_some() {
-                            "yep"
-                        } else {
-                            "nope"
-                        }
-                    );
-                }
-
-                None
+                child_stdin.write_all(&bytes).await?;
+                child_stdin.write_all(b"\n").await?;
             }
-        } {
-            writer.write_all(&bitcode::encode(&response)).await?;
         }
     }
+
     Ok(())
 }
 
@@ -87,31 +96,27 @@ async fn init_connection(
     (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
 ) -> color_eyre::Result<()> {
     let (name, flags) = loop {
-        let mut buf = [0u8; 1024];
-        let count = reader.read(&mut buf).await?;
-
-        let message: ClientMessage = bitcode::decode(&buf[..count])?;
+        let message = read_message!(ClientMessage, reader).await?;
 
         match message {
             ClientMessage::Start { name, flags } => break (name, flags),
-            _ => {
-                writer
-                    .write(&bitcode::encode(&ServerMessage::ServerNotStarted))
-                    .await?
-            }
+            _ => match write_message!(writer, ServerMessage::NotStarted).await {
+                Ok(()) => println!("Successfully wrote"),
+                Err(err) => eprintln!("Failed to write: {err:?}"),
+            },
         };
     };
 
-    handle_server_child(
-        Command::new(name)
-            .args(flags)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()?,
-        reader,
-        writer,
-    )
-    .await
+    let mut child = Command::new(name)
+        .args(flags)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    handle_server_child(&mut child, reader, writer).await?;
+
+    Ok(())
 }
 
 pub async fn main() -> color_eyre::Result<()> {
@@ -137,25 +142,32 @@ pub async fn main() -> color_eyre::Result<()> {
         select! {
             res = tcp_listener.accept() => {
                 tokio::spawn(async move {
-                    let (mut stream, _addr) = res?;
+                    let (mut stream, addr) = res?;
+
+                    println!("Connected to client by TCP: {addr}");
 
                     if let Err(err) = init_connection(stream.split()).await {
                         eprintln!("{err:?}");
                     }
 
-                    Ok::<(), io::Error>(())
+                    println!("Connection with {addr} ended");
+
+                    io::Result::Ok(())
                 });
             },
             res = unix_sock_listener.accept() => {
                 tokio::spawn(async move {
-                    let (mut stream, _addr) = res?;
-                    let (reader, writer) = stream.split();
+                    let (mut stream, addr) = res?;
+
+                    println!("Connected to client by Unix socket: {addr:?}");
 
                     if let Err(err) = init_connection(stream.split()).await {
                         eprintln!("{err:?}");
                     }
 
-                    Ok::<(), io::Error>(())
+                    println!("Connection with {addr:?} ended");
+
+                    io::Result::Ok(())
                 });
             }
             res = stdin_reader.read_line(&mut buf) => {
