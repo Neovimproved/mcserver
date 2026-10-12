@@ -25,8 +25,14 @@ async fn handle_server_child(
         .take()
         .ok_or_else(|| eyre!("Unable to take stdout from child"))?;
 
+    let mut child_stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| eyre!("Unable to take stderr from child"))?;
+
     loop {
         let mut child_stdout_buf = vec![0u8; 1024];
+        let mut child_stderr_buf = vec![0u8; 1024];
 
         let client_message_length = select! {
             res = client_reader.read_u32() => {
@@ -38,13 +44,21 @@ async fn handle_server_child(
                     }
                 }
             },
+
             res = child.wait() => {
                 res?;
                 break;
             },
+
             res = child_stdout.read(&mut child_stdout_buf) => {
                 res?;
                 write_message!(client_writer, ServerMessage::Output(child_stdout_buf)).await?;
+                continue;
+            }
+
+            res = child_stderr.read(&mut child_stderr_buf) => {
+                res?;
+                write_message!(client_writer, ServerMessage::Error(child_stderr_buf)).await?;
                 continue;
             }
         };
