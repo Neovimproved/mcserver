@@ -55,7 +55,7 @@ macro_rules! write_message {
             $writer.write_u32(encoded_message.len() as u32).await?;
             $writer.write_all(&encoded_message).await?;
 
-            color_eyre::Result::<()>::Ok(())
+            mcserver_core::Result::<()>::Ok(())
         }
     };
 }
@@ -74,7 +74,7 @@ macro_rules! read_message {
             let mut buf = vec![0u8; $length as usize];
             $reader.read_exact(&mut buf).await?;
 
-            color_eyre::Result::<$t>::Ok(bitcode::decode(&buf)?)
+            mcserver_core::Result::<$t>::Ok(bitcode::decode(&buf)?)
         }
     };
 }
