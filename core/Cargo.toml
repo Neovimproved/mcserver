@@ -8,5 +8,5 @@ license = "MIT"
 
 [dependencies]
 bitcode = { workspace = true }
-derive_more = { version = "2.1.1", features = ["display"] }
+derive_more = { workspace = true, features = ["display", "error", "from"] }
 const_format = { workspace = true }

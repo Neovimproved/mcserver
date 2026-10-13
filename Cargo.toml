@@ -4,7 +4,6 @@ members = ["daemon", "cli", "core"]
 
 [workspace.dependencies]
 bitcode = "0.6.9"
-color-eyre = "0.6.5"
 const_format = "0.2.36"
 derive_more = { version = "2.1.1", features = ["display", "error", "from"] }
 tokio = { version = "1.53.1", features = ["full"] }

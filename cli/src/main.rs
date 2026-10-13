@@ -2,35 +2,37 @@ use std::{
     env,
     net::SocketAddr,
     ops::{Deref, DerefMut},
-    process::exit,
+    process::Command,
     str::FromStr,
+    thread::sleep,
+    time::Duration,
 };
 
-use color_eyre::eyre::{Context, eyre};
-
-use mcserver_core::*;
+use color_eyre::eyre::Context;
+use mcserver_core::{LOCAL_TCP_ADDR, SOCKET_PATH};
 use ratatui::DefaultTerminal;
 use tokio::{
     io,
     net::{TcpStream, UnixStream},
 };
 
+use crate::app::{App, ExitReason};
+
 mod app;
-mod error;
-
-use app::App;
-
-const CONNECTION_REFUSED_ERROR_MESSAGE: &str =
-    "Server refused to connect. It is likely not running";
 
 async fn try_connect_unix_socket() -> color_eyre::Result<UnixStream> {
     let stream = match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => stream,
         Err(err) => match err.kind() {
-            io::ErrorKind::ConnectionRefused => {
-                return Err(eyre!(CONNECTION_REFUSED_ERROR_MESSAGE));
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
+                // spin it up!! 🕸️
+                let mut cmd = Command::new("./mcserver-daemon");
+                cmd.status()?;
+
+                sleep(Duration::from_millis(100));
+                UnixStream::connect(SOCKET_PATH).await?
             }
-            _ => return Err(err).wrap_err("Failed to connect to unix socket"),
+            _ => return Err(err).wrap_err("Failed to connect to unix stream"),
         },
     };
 
@@ -43,11 +45,7 @@ async fn try_connect_tcp(addr: Option<&str>) -> color_eyre::Result<TcpStream> {
             .transpose()?
             .unwrap_or(LOCAL_TCP_ADDR),
     )
-    .await
-    .map_err(|err| match err.kind() {
-        io::ErrorKind::ConnectionRefused => eyre!(CONNECTION_REFUSED_ERROR_MESSAGE),
-        _ => err.into(),
-    })?;
+    .await?;
 
     Ok(stream)
 }
@@ -92,20 +90,24 @@ async fn main() -> color_eyre::Result<()> {
 
     let mut app = App::new();
 
-    match args.next().as_deref() {
+    let exit_reason = match args.next().as_deref() {
         Some("tcp") => {
             let mut stream = try_connect_tcp(args.next().as_deref()).await?;
-            app.run(&mut GuardedTerminal::new(), stream.split()).await?;
+            app.run(&mut GuardedTerminal::new(), stream.split()).await?
         }
         Some("sock") | Some("socket") | None => {
             let mut stream = try_connect_unix_socket().await?;
             app.run(&mut GuardedTerminal::new(), stream.split()).await?
         }
-        Some(other) => return Err(eyre!("Connection type {other} is not supported")),
-    }
+        Some(other) => {
+            return Err(mcserver_core::Error::UnsupportedConnectionType(other.to_string()).into());
+        }
+    };
 
-    println!("Ending...");
+    match exit_reason {
+        ExitReason::ServerClosed => println!("Server closed"),
+        ExitReason::ClientExit => {}
+    };
 
-    // To prevent it from waiting for stdin to finish reading a line
-    exit(0);
+    Ok(())
 }

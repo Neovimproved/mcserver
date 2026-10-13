@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use bitcode::{Decode, Encode};
 use derive_more::Display;
 
+use crate::LineBuffer;
+
 fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
     str::from_utf8(bytes)
         .map(Cow::Borrowed)
@@ -14,13 +16,16 @@ fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
         })
 }
 
-#[derive(Debug, Decode, Display, Encode)]
+#[derive(Clone, Debug, Decode, Display, Encode)]
 pub enum ServerMessage {
     #[display("Child has not been successfully killed ({_0})")]
     KillFailure(String),
 
     #[display("Child has been killed")]
     KillSuccess,
+
+    #[display("Child has naturally closed")]
+    Closed,
 
     #[display("Message from server: {_0}")]
     Message(String),
@@ -29,19 +34,29 @@ pub enum ServerMessage {
     AlreadyStarted,
 
     #[display("A server has not yet been created, so you cannot interact with one yet")]
-    NotStarted,
+    NotAttached,
 
     #[display("Output from the server: {}", display_bytes(_0))]
     Output(Vec<u8>),
 
     #[display("Stderr from the application: {}", display_bytes(_0))]
     Error(Vec<u8>),
+
+    #[display("Line history sent:{}", _0.iter().fold(String::new(), |mut acc, item| {
+        acc.push('\n');
+        acc.push_str(item);
+        acc
+    }))]
+    History(LineBuffer),
 }
 
 #[derive(Debug, Decode, Display, Encode)]
 pub enum ClientMessage {
-    #[display("Start variant with name: {name} and flags: {}", flags.join(", "))]
-    Start { name: String, flags: Vec<String> },
+    #[display("Attach to server {name}")]
+    Attach { name: String },
+
+    #[display("Detach from the current server")]
+    Detach,
 
     #[display("Kill active process")]
     Kill,
@@ -51,33 +66,42 @@ pub enum ClientMessage {
 }
 
 #[macro_export]
+macro_rules! write_bytes {
+    ($writer:ident, $bytes:expr) => {
+        async {
+            $writer.write_u32($bytes.len() as u32).await?;
+            $writer.write_all(&$bytes).await?;
+
+            io::Result::<()>::Ok(())
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! write_message {
     ($writer:ident, $message:expr) => {
         async {
             let encoded_message = bitcode::encode(&$message);
-            $writer.write_u32(encoded_message.len() as u32).await?;
-            $writer.write_all(&encoded_message).await?;
-
-            mcserver_core::Result::<()>::Ok(())
+            mcserver_core::write_bytes!($writer, encoded_message).await
         }
     };
 }
 
 #[macro_export]
 macro_rules! read_message {
-    ($t:ty, $reader:ident) => {
+    ($reader:ident) => {
         async {
             let length = $reader.read_u32().await?;
-            read_message!($t, $reader, length).await
+            read_message!($reader, length).await
         }
     };
 
-    ($t:ty, $reader:ident, $length:ident) => {
+    ($reader:ident, $length:ident) => {
         async {
             let mut buf = vec![0u8; $length as usize];
             $reader.read_exact(&mut buf).await?;
 
-            mcserver_core::Result::<$t>::Ok(bitcode::decode(&buf)?)
+            mcserver_core::Result::<_>::Ok(bitcode::decode(&buf)?)
         }
     };
 }

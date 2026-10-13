@@ -1,5 +1,3 @@
-mod runtime;
-
 use std::{
     env,
     fs::{self, File},
@@ -10,6 +8,9 @@ use const_format::formatcp;
 use daemonize2::Daemonize;
 use mcserver_core::*;
 use tokio::runtime::Runtime;
+
+mod runtime;
+mod types;
 
 fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
@@ -30,14 +31,12 @@ fn main() -> color_eyre::Result<()> {
     let daemonize = Daemonize::new()
         .pid_file(PID_FILE_PATH) // Every method except `new` and `start`
         .working_directory(TEMP_DIR) // for default behaviour.
-        .user("nobody")
-        .group("nogroup")
-        .umask(0o777)
         .stdout(stdout)
         .stderr(stderr)
         .privileged_action(|| "Executed before drop privileges");
 
     unsafe { daemonize.start() }.wrap_err("Failed to daemonize process")?;
+
     println!("Successfully daemonized!");
 
     let runtime = Runtime::new().wrap_err("Failed to create runtime")?;

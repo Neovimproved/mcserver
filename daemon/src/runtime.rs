@@ -1,6 +1,7 @@
-use std::process::Stdio;
+use std::{env, process::Stdio, sync::Arc};
 
-use color_eyre::eyre::{Context, eyre};
+use color_eyre::eyre::{Context, ContextCompat, eyre};
+use dashmap::DashMap;
 use mcserver_core::*;
 use tokio::{
     fs,
@@ -8,13 +9,25 @@ use tokio::{
     net::{TcpListener, UnixListener},
     process::{Child, Command},
     select,
+    sync::{
+        broadcast,
+        mpsc::{UnboundedReceiver, unbounded_channel},
+        oneshot,
+    },
 };
 
-async fn handle_server_child(
-    child: &mut Child,
-    mut client_reader: impl AsyncReadExt + Unpin,
-    mut client_writer: impl AsyncWriteExt + Unpin,
+use crate::types::{OwnedPair, Request, ServerCommunicator};
+
+async fn start_server(
+    mut child: Child,
+    mut message_receiver: UnboundedReceiver<ClientMessage>,
+    mut request_receiver: UnboundedReceiver<Request>,
+    sender: broadcast::Sender<ServerMessage>,
 ) -> color_eyre::Result<()> {
+    println!("Server started");
+
+    let mut history: LineBuffer = LineBuffer::new();
+
     let mut child_stdin = child
         .stdin
         .take()
@@ -34,103 +47,261 @@ async fn handle_server_child(
         let mut child_stdout_buf = vec![0u8; 1024];
         let mut child_stderr_buf = vec![0u8; 1024];
 
-        let client_message_length = select! {
-            res = client_reader.read_u32() => {
-                match res {
-                    Ok(len) => len as usize,
-                    Err(err) => match err.kind() {
-                        io::ErrorKind::UnexpectedEof => break,
-                        _ => return Err(err).wrap_err("Failed to read from client"),
-                    }
-                }
-            },
-
+        select! {
             res = child.wait() => {
+                // Server closed
                 res?;
                 break;
             },
 
             res = child_stdout.read(&mut child_stdout_buf) => {
                 res?;
-                write_message!(client_writer, ServerMessage::Output(child_stdout_buf)).await?;
+                // TODO: (potentially) encode before sending so that it only is encoded once
+                history.push(String::from_utf8_lossy(&child_stdout_buf).to_string());
+                let _ = sender.send(ServerMessage::Output(child_stdout_buf));
                 continue;
             }
 
             res = child_stderr.read(&mut child_stderr_buf) => {
                 res?;
-                write_message!(client_writer, ServerMessage::Error(child_stderr_buf)).await?;
+                history.push(String::from_utf8_lossy(&child_stderr_buf).to_string());
+                let _ = sender.send(ServerMessage::Error(child_stderr_buf));
                 continue;
             }
+
+            message = message_receiver.recv() => {
+                let Some(message) = message else {
+                    continue;
+                };
+
+                match message {
+                    ClientMessage::Attach { name } => {
+                        eprintln!("Tried attaching to {name} (does not work here)");
+                    },
+                    ClientMessage::Detach => {
+                        eprintln!("Tried detaching (does not work here)");
+                    },
+                    ClientMessage::Kill => {
+                        match child.kill().await {
+                            Ok(()) => {
+                                sender.send(ServerMessage::KillSuccess)?;
+                                break;
+                            }
+                            Err(err) => {
+                                sender.send(ServerMessage::KillFailure(err.to_string()))?;
+                                return Err(eyre!("Failed to kill server"));
+                            }
+                        };
+                    }
+                    ClientMessage::ProgramInput(bytes) => {
+                        history.push(String::from_utf8_lossy(&bytes).to_string());
+                        child_stdin.write_all(&bytes).await?;
+                        child_stdin.write_all(b"\n").await?;
+                    }
+                }
+            }
+
+            request = request_receiver.recv() => {
+                let Some(request) = request else {
+                    continue;
+                };
+
+                let _ = match request {
+                    Request::GetHistory(sender) => sender.send(history.clone()).inspect_err(|_| eprintln!("Failed to send history")),
+                };
+            }
         };
-
-        if client_message_length == 0 {
-            println!("EOL");
-            break;
-        }
-
-        if client_message_length > MAX_MESSAGE_LENGTH {
-            println!("Too long");
-            return Err(eyre!("The user sent a message that was too long"));
-        }
-
-        let message = read_message!(ClientMessage, client_reader, client_message_length).await?;
-
-        println!("Received {message}");
-
-        let initial_response =
-            ServerMessage::Message("That's nice buddy. I'll handle your message rq".to_string());
-
-        write_message!(client_writer, initial_response).await?;
-
-        match message {
-            ClientMessage::Start { name: _, flags: _ } => {
-                write_message!(client_writer, ServerMessage::AlreadyStarted).await?;
-            }
-            ClientMessage::Kill => match child.kill().await {
-                Ok(()) => {
-                    write_message!(client_writer, ServerMessage::KillSuccess).await?;
-                    break;
-                }
-                Err(err) => {
-                    write_message!(client_writer, ServerMessage::KillFailure(err.to_string()))
-                        .await?
-                }
-            },
-            ClientMessage::ProgramInput(bytes) => {
-                child_stdin.write_all(&bytes).await?;
-                child_stdin.write_all(b"\n").await?;
-            }
-        }
     }
 
     Ok(())
 }
 
-async fn init_connection(
-    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+async fn server_lifecycle(
+    name: String,
+    message_receiver: UnboundedReceiver<ClientMessage>,
+    request_receiver: UnboundedReceiver<Request>,
+    sender: broadcast::Sender<ServerMessage>,
+    child: Child,
+    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> color_eyre::Result<()> {
-    let (name, flags) = loop {
-        let message = read_message!(ClientMessage, reader).await?;
+    let res = start_server(child, message_receiver, request_receiver, sender).await;
 
-        match message {
-            ClientMessage::Start { name, flags } => break (name, flags),
-            _ => match write_message!(writer, ServerMessage::NotStarted).await {
-                Ok(()) => println!("Successfully wrote"),
-                Err(err) => eprintln!("Failed to write: {err:?}"),
-            },
-        };
-    };
+    if let Err(err) = &res {
+        eprintln!("Server: {name} btwwwwww\n{err:?}");
+    }
 
-    let mut child = Command::new(name)
-        .args(flags)
+    server_communicators.remove(&name);
+
+    println!("Server {name} closed");
+
+    res
+}
+
+// async fn unattached_client_loop(
+//     rw_pair: OwnedPair,
+//     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+// ) {
+// }
+
+enum ServeAction {
+    Prompt,
+    Attach(String),
+}
+
+fn create_command(name: &str) -> color_eyre::Result<Command> {
+    let mut process_path = env::home_dir().wrap_err("Failed to get home directory")?;
+
+    process_path.extend([
+        "Dev",
+        "example-terminal-app",
+        "target",
+        "debug",
+        "example-terminal-app",
+    ]);
+
+    let mut command = Command::new(process_path);
+
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .arg(format!("{name} echoes "));
 
-    handle_server_child(&mut child, reader, writer).await?;
+    Ok(command)
+}
 
-    Ok(())
+async fn serve_client(
+    rw_pair: OwnedPair,
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> color_eyre::Result<()> {
+    #[allow(unreachable_code)]
+    let (mut reader, mut writer) = match rw_pair {
+        OwnedPair::UnixSocket(owned_read_half, owned_write_half) => {
+            (owned_read_half, owned_write_half)
+        }
+        OwnedPair::TcpConnection(..) => todo!(),
+    };
+
+    let mut action = ServeAction::Prompt;
+
+    loop {
+        match action {
+            ServeAction::Prompt => {
+                let name = &loop {
+                    let message: ClientMessage = read_message!(reader).await?;
+
+                    match message {
+                        ClientMessage::Attach { name } => break name,
+                        _ => {
+                            write_message!(writer, ServerMessage::NotAttached).await?;
+                            println!("Not attached but received {message}!");
+                        }
+                    };
+                };
+
+                action = ServeAction::Attach(name.to_owned());
+            }
+
+            ServeAction::Attach(name) => {
+                let (message_sender, requets_sender, mut receiver) = match server_communicators
+                    .get(&name)
+                {
+                    Some(com) => (
+                        com.client_message_sender.clone(),
+                        com.client_request_sender.clone(),
+                        com.server_message_sender.subscribe(),
+                    ),
+                    None => {
+                        let child = create_command(&name)?.spawn()?;
+
+                        let (client_message_sender, client_message_receiver) = unbounded_channel();
+
+                        let (client_request_sender, client_request_receiver) = unbounded_channel();
+
+                        let (server_message_sender, server_message_receiver) =
+                            broadcast::channel(1024);
+
+                        server_communicators.insert(
+                            name.to_owned(),
+                            ServerCommunicator {
+                                client_message_sender: client_message_sender.clone(),
+                                client_request_sender: client_request_sender.clone(),
+                                server_message_sender: server_message_sender.clone(),
+                            },
+                        );
+
+                        tokio::spawn(server_lifecycle(
+                            name.to_owned(),
+                            client_message_receiver,
+                            client_request_receiver,
+                            server_message_sender.clone(),
+                            child,
+                            server_communicators.clone(),
+                        ));
+
+                        (
+                            client_message_sender,
+                            client_request_sender,
+                            server_message_receiver,
+                        )
+                    }
+                };
+
+                let (tx, rx) = oneshot::channel();
+
+                requets_sender.send(Request::GetHistory(tx))?;
+
+                let history = rx.await.unwrap_or_else(|err| {
+                    LineBuffer::from(vec![format!("Falied to produce history: {err:?}")])
+                });
+
+                write_message!(writer, ServerMessage::History(history)).await?;
+
+                action = loop {
+                    select! {
+                        res = receiver.recv() => {
+                            let message = match res {
+                                Ok(message) => message,
+                                Err(broadcast::error::RecvError::Closed) => {
+                                    write_message!(writer, ServerMessage::Closed).await?;
+                                    break ServeAction::Prompt;
+                                },
+                                Err(broadcast::error::RecvError::Lagged(messages)) => {
+                                    eprintln!("Missed {messages} messages");
+                                    continue;
+                                },
+                            };
+                            write_message!(writer, message).await?;
+                        }
+
+                        res = reader.read_u32() => {
+                            let size = match res {
+                                Ok(n) => n as usize,
+                                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                                    println!("Graceful disconnect!!");
+                                    return Ok(());
+                                }
+                                Err(err) => return Err(err).wrap_err("Failed to read message size"),
+                            };
+
+                            if size > MAX_MESSAGE_LENGTH {
+                                eprintln!("The client is being very disingenuous right now!! I'm going to have to break up with them unfortunately");
+                                return Err(eyre!("Disingenuous client"));
+                            }
+
+                            let message: ClientMessage = read_message!(reader, size).await?;
+
+                            match message {
+                                ClientMessage::Attach { name } => break ServeAction::Attach(name),
+                                ClientMessage::Detach => break ServeAction::Prompt,
+                                ClientMessage::Kill | ClientMessage::ProgramInput(..) => message_sender.send(message)?,
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub async fn main() -> color_eyre::Result<()> {
@@ -148,48 +319,55 @@ pub async fn main() -> color_eyre::Result<()> {
     let unix_sock_listener = UnixListener::bind(SOCKET_PATH)?;
     println!("Bound to unix socket!");
 
+    let server_communicators: Arc<DashMap<String, ServerCommunicator>> = Arc::new(DashMap::new());
+
+    let mut buf = String::new();
+    let mut stdin_finished = false;
     let mut stdin_reader = BufReader::new(io::stdin());
 
     loop {
-        let mut buf = String::new();
-
         select! {
             res = tcp_listener.accept() => {
+                let server_communicators = server_communicators.clone();
+
                 tokio::spawn(async move {
-                    let (mut stream, addr) = res?;
+                    let (stream, addr) = res?;
 
                     println!("Connected to client by TCP: {addr}");
 
-                    if let Err(err) = init_connection(stream.split()).await {
+                    if let Err(err) = serve_client(OwnedPair::tcp(stream.into_split()), &server_communicators).await {
                         eprintln!("{err:?}");
                     }
-
-                    println!("Connection with {addr} ended");
 
                     io::Result::Ok(())
                 });
             },
+
             res = unix_sock_listener.accept() => {
+                let server_communicators = server_communicators.clone();
+
                 tokio::spawn(async move {
-                    let (mut stream, addr) = res?;
+                    let (stream, addr) = res?;
 
                     println!("Connected to client by Unix socket: {addr:?}");
 
-                    if let Err(err) = init_connection(stream.split()).await {
+                    if let Err(err) = serve_client(OwnedPair::unix(stream.into_split()), &server_communicators).await {
                         eprintln!("{err:?}");
                     }
-
-                    println!("Connection with {addr:?} ended");
 
                     io::Result::Ok(())
                 });
             }
-            res = stdin_reader.read_line(&mut buf) => {
+
+            res = stdin_reader.read_line(&mut buf), if !stdin_finished => {
                 res?;
 
-                let response = buf.trim();
+                if buf.is_empty() {
+                    stdin_finished = true;
+                    continue;
+                }
 
-                match response {
+                match &buf[..buf.len()-1] {
                     "stop" => {
                         println!("OK, stopping");
                         break;
