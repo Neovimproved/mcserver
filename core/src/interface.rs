@@ -5,15 +5,33 @@ use derive_more::Display;
 
 use crate::LineBuffer;
 
-fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
-    str::from_utf8(bytes)
-        .map(Cow::Borrowed)
-        .unwrap_or_else(|_| {
-            Cow::Owned(format!(
-                "(some non-utf-8 data has been lost) {}",
-                String::from_utf8_lossy(bytes)
-            ))
-        })
+fn terminal_like_bytes(bytes: &str, normal_end: usize) -> String {
+    let mut acc = String::from(&bytes[..normal_end]);
+
+    bytes[normal_end..].chars().for_each(|ch| {
+        let num = ch as u32;
+        match num {
+            0..31 => unsafe { acc.push_str(str::from_utf8_unchecked(&[b'^', ch as u8 + 64])) },
+            _ => acc.push(ch),
+        }
+    });
+
+    acc
+}
+
+pub fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
+    let string = String::from_utf8_lossy(bytes);
+
+    for (idx, ch) in string.char_indices() {
+        match ch as u32 {
+            // tab, newline, carriage return (legacy costs)
+            9 | 10 | 13 => {}
+            0..=31 => return Cow::Owned(terminal_like_bytes(&string, idx)),
+            _ => {}
+        }
+    }
+
+    string
 }
 
 #[derive(Clone, Debug, Decode, Display, Encode)]
@@ -42,12 +60,12 @@ pub enum ServerMessage {
     #[display("Stderr from the application: {}", display_bytes(_0))]
     Error(Vec<u8>),
 
-    #[display("Line history sent:{}", _0.iter().fold(String::new(), |mut acc, item| {
+    #[display("Line history sent:\n{}", _0.iter().fold(String::new(), |mut acc, vec| {
+        acc.push_str(&display_bytes(vec));
         acc.push('\n');
-        acc.push_str(item);
         acc
     }))]
-    History(LineBuffer),
+    History(LineBuffer<Vec<u8>>),
 }
 
 #[derive(Debug, Decode, Display, Encode)]
