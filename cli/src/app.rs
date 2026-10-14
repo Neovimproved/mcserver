@@ -1,15 +1,16 @@
-use std::{cell::UnsafeCell, io::IsTerminal, iter, mem};
+use std::{cell::UnsafeCell, io::IsTerminal, mem};
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
-use mcserver_core::{ClientMessage, LineBuffer, ServerMessage, read_message, write_message};
+use mcserver_core::{
+    ClientMessage, LineBuffer, ServerMessage, display_bytes, read_message, write_message,
+};
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    style::{Color, Style, Stylize},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
@@ -18,6 +19,7 @@ struct Cache<T> {
     value: UnsafeCell<Option<T>>,
 }
 
+#[allow(unused)]
 impl<T> Cache<T> {
     pub fn new() -> Self {
         Self {
@@ -40,25 +42,35 @@ impl<T> Cache<T> {
     }
 }
 
+#[derive(Debug)]
+enum ServerState {
+    Normal,
+    Escaping,
+    Dead,
+}
+
+#[derive(Debug)]
 enum Mode {
     Selecting,
-    Output {
+    Console {
+        attached_server: usize,
         name: String,
         input: String,
         output: LineBuffer,
-        escaping: bool,
-        output_text: Cache<String>,
+        state: ServerState,
+        // output_text: Cache<String>,
     },
 }
 
 impl Mode {
-    fn output(name: String) -> Self {
-        Self::Output {
+    fn output(index: usize, name: String) -> Self {
+        Self::Console {
+            attached_server: index,
             name,
             input: String::new(),
             output: LineBuffer::new(),
-            escaping: false,
-            output_text: Cache::new(),
+            state: ServerState::Normal,
+            // output_text: Cache::new(),
         }
     }
 }
@@ -92,7 +104,7 @@ impl App {
         }
     }
 
-    pub async fn attach(
+    pub async fn request_attach(
         &self,
         server_name: impl Into<String>,
         mut writer: impl AsyncWriteExt + Unpin,
@@ -118,11 +130,12 @@ impl App {
                         return Ok(());
                     };
 
-                    self.attach(name, writer)
+                    self.request_attach(name, writer)
                         .await
                         .into_diagnostic()
                         .context("Failed to attach to server")?;
-                    self.mode = Mode::output(name.to_owned());
+
+                    self.mode = Mode::output(self.selected_server, name.to_owned());
                 }
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
                 // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
@@ -143,19 +156,69 @@ impl App {
                 _ => {}
             },
 
-            Mode::Output {
-                input,
-                output,
-                escaping,
-                output_text,
+            Mode::Console {
+                state: ServerState::Dead,
                 ..
-            } if !*escaping => match key.code {
+            } => match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::BackTab => {
+                    self.selection_mode()
+                }
+                _ => {}
+            },
+
+            // Escaping output
+            Mode::Console { name, state, .. } if let ServerState::Dead = state => match key.code {
+                KeyCode::Backspace => todo!(),
+                KeyCode::Enter => {
+                    let Some(selected_server) = self.servers.get(self.selected_server) else {
+                        // TODO: ig this is an error
+                        return Ok(());
+                    };
+
+                    *state = ServerState::Normal;
+
+                    if name != selected_server {
+                        self.request_attach(selected_server, writer)
+                            .await
+                            .into_diagnostic()
+                            .context("Failed to attach to server")?;
+
+                        self.mode = Mode::output(self.selected_server, selected_server.to_owned());
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+
+                KeyCode::Tab => {
+                    *state = ServerState::Normal;
+                }
+
+                KeyCode::BackTab => self.selection_mode(),
+
+                KeyCode::Char('q') => self.exit(),
+
+                KeyCode::Delete => todo!(),
+                KeyCode::Insert => todo!(),
+                KeyCode::F(_) => todo!(),
+                KeyCode::Char(_) => todo!(),
+                KeyCode::Null => todo!(),
+                KeyCode::Esc => self.selection_mode(),
+                _ => {}
+            },
+
+            Mode::Console {
+                input,
+                state,
+                // output_text,
+                ..
+            } => match key.code {
                 KeyCode::Backspace => {
                     input.pop();
-                    output_text.invalidate();
+                    // output_text.invalidate();
                 }
                 KeyCode::Enter => {
-                    output_text.invalidate();
+                    // output_text.invalidate();
+                    input.push('\n');
 
                     write_message!(
                         writer,
@@ -169,56 +232,25 @@ impl App {
                 KeyCode::Right => todo!("Implement cursor right"),
                 KeyCode::Tab => todo!("Implement autocompletions"),
                 KeyCode::BackTab => {
-                    *escaping = true;
+                    *state = ServerState::Escaping;
                 }
                 KeyCode::Delete => todo!("Implement deletion"),
                 // KeyCode::F(_) => todo!(),
                 KeyCode::Char(ch) => {
+                    if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        write_message!(
+                            writer,
+                            ClientMessage::ProgramInput(vec![(ch as u8) - b'a' + 1])
+                        )
+                        .await
+                        .into_diagnostic()?;
+                    }
                     input.push(ch);
-                    output_text.invalidate();
+                    // output_text.invalidate();
                 }
                 KeyCode::Esc => {
-                    *escaping = true;
+                    *state = ServerState::Escaping;
                 }
-                _ => {}
-            },
-
-            // Escaping output
-            Mode::Output { name, escaping, .. } => match key.code {
-                KeyCode::Backspace => todo!(),
-                KeyCode::Enter => {
-                    let Some(selected_server) = self.servers.get(self.selected_server) else {
-                        // TODO: ig this is an error
-                        return Ok(());
-                    };
-
-                    *escaping = false;
-
-                    if name != selected_server {
-                        self.attach(selected_server, writer)
-                            .await
-                            .into_diagnostic()
-                            .context("Failed to attach to server")?;
-                        self.mode = Mode::output(selected_server.to_owned());
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
-
-                KeyCode::Tab => {
-                    *escaping = false;
-                }
-
-                KeyCode::BackTab => self.selection_mode(),
-
-                KeyCode::Char('q') => self.exit(),
-
-                KeyCode::Delete => todo!(),
-                KeyCode::Insert => todo!(),
-                KeyCode::F(_) => todo!(),
-                KeyCode::Char(_) => todo!(),
-                KeyCode::Null => todo!(),
-                KeyCode::Esc => self.selection_mode(),
                 _ => {}
             },
         };
@@ -235,6 +267,11 @@ impl App {
 
         loop {
             if self.exiting {
+                writer
+                    .shutdown()
+                    .await
+                    .into_diagnostic()
+                    .wrap_err("Failed to send shutdown packet")?;
                 break Ok(());
             }
 
@@ -272,25 +309,27 @@ impl App {
                     match read_message!(reader, length).await.into_diagnostic().context("Failed to receive message from server")? {
                         ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
                         ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
-
-                        // automatically cleans up
-                        ServerMessage::Closed => self.selection_mode(),
+                        ServerMessage::Closed => if let Mode::Console { input, state, .. } = &mut self.mode {
+                            *input = "Press enter to return...".to_string();
+                            *state = ServerState::Dead;
+                        },
                         ServerMessage::Message(message) => stderr_log!("Received a message from the server: {message}"),
                         ServerMessage::AlreadyStarted => stderr_log!("The server has already started apparently"),
                         ServerMessage::NotAttached => stderr_log!("The server has not yet started apparently"),
-                        ServerMessage::Output(bytes) => if let Mode::Output { output, output_text, .. } = &mut self.mode {
+                        ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
                             stderr_log!("Btw, got {}", str::from_utf8(&bytes).unwrap_or("couldn't nonvert"));
-                            let line = String::from_utf8_lossy(&bytes).to_string();
-                            output.push(line);
-                            output_text.invalidate();
+                            output.push(display_bytes(&bytes).to_string());
+                            // output_text.invalidate();
                         },
-                        ServerMessage::Error(bytes) => if let Mode::Output { output, output_text, .. } = &mut self.mode {
-                            output.push(String::from_utf8_lossy(&bytes).to_string());
-                            output_text.invalidate();
+                        ServerMessage::Error(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
+                            output.push(display_bytes(&bytes).to_string());
+                            // output_text.invalidate();
                         }
-                        ServerMessage::History(history) => if let Mode::Output { output, output_text, .. } = &mut self.mode {
-                            output.extend(history);
-                            output_text.invalidate();
+                        ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
+                            history.into_iter().for_each(|line|{
+                                output.push(display_bytes(&line).to_string())
+                            });
+                            // output_text.invalidate();
                         }
                     };
                 }
@@ -299,13 +338,41 @@ impl App {
     }
 
     fn draw_servers_list_widget(&self) -> List<'_> {
-        List::new(self.servers.iter().enumerate().map(|(idx, name)| {
-            ListItem::new(if idx == self.selected_server {
-                Text::styled(format!("> {name}"), Style::new().bold())
-            } else {
-                Text::raw(format!("  {name}"))
-            })
-        }))
+        let servers_iter = self.servers.iter().enumerate();
+
+        if let Mode::Console {
+            attached_server, ..
+        } = self.mode
+        {
+            List::new(servers_iter.map(|(idx, name)| {
+                let item = if idx == self.selected_server {
+                    ListItem::from(format!("> {name}")).bold()
+                } else {
+                    ListItem::from(format!("  {name}"))
+                };
+
+                if idx == attached_server {
+                    item.fg(Color::Black).bg(Color::White)
+                } else {
+                    item
+                }
+            }))
+        } else {
+            List::new(servers_iter.map(|(idx, name)| {
+                if idx == self.selected_server {
+                    ListItem::from(format!("> {name}")).bold()
+                } else {
+                    ListItem::from(format!("  {name}"))
+                }
+            }))
+        }
+        // List::new(self.servers.iter().enumerate().map(|(idx, name)| {
+        //     ListItem::new(if idx == self.selected_server {
+        //         Text::styled(format!("> {name}"), Style::new().bold())
+        //     } else {
+        //         Text::raw(format!("  {name}"))
+        //     })
+        // }))
         .block(Block::new().title("Servers").borders(Borders::ALL))
     }
 
@@ -322,10 +389,10 @@ impl App {
 
         frame.render_widget(background_block, frame.area());
 
-        let Mode::Output {
+        let Mode::Console {
             input,
             output,
-            escaping,
+            state,
             ..
         } = &self.mode
         else {
@@ -333,7 +400,7 @@ impl App {
             return;
         };
 
-        let output_area = if *escaping {
+        let output_area = if matches!(state, ServerState::Escaping) {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                 .split(frame.area());
 
@@ -345,15 +412,15 @@ impl App {
         };
 
         let output_text_width = output_area.width.saturating_sub(2) as usize;
-        let lines_available = output_area.height.saturating_sub(2) as usize;
+        let output_lines_available = output_area.height.saturating_sub(2) as usize;
 
         let mut output_text = output
             .iter()
             // use skip here to get the maximum number of lines that might need to be used
             // Then, the lines that aren't used will simply not be rendered
-            .skip(output.len().saturating_sub(lines_available))
+            .skip((output.len()).saturating_sub(output_lines_available.saturating_sub(1)))
             .fold(String::new(), |mut acc, item| {
-                acc.push_str(item);
+                acc.push_str(&item);
                 // acc.push('\n');
                 acc
             });
@@ -371,9 +438,9 @@ impl App {
         // );
 
         let output_widget = Paragraph::new(output_text)
-            .block(Block::new().title("Output").borders(Borders::ALL))
+            .block(Block::new().title("Console").borders(Borders::ALL))
             .wrap(Wrap { trim: false })
-            .scroll((lines.saturating_sub(lines_available) as u16, 0));
+            .scroll((lines.saturating_sub(output_lines_available) as u16, 0));
 
         frame.render_widget(output_widget, output_area);
     }
