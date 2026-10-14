@@ -28,5 +28,5 @@ impl OwnedPair {
 }
 
 pub enum Request {
-    GetHistory(oneshot::Sender<LineBuffer>),
+    GetHistory(oneshot::Sender<LineBuffer<Vec<u8>>>),
 }

@@ -24,7 +24,7 @@ async fn start_server(
     mut request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
 ) -> color_eyre::Result<()> {
-    let mut history: LineBuffer = LineBuffer::new();
+    let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
     let mut child_stdin = child
         .stdin
@@ -42,10 +42,11 @@ async fn start_server(
         .ok_or_else(|| eyre!("Unable to take stderr from child"))?;
 
     let mut stdout_finished = false;
+    let mut stderr_finished = false;
 
     loop {
-        let mut child_stdout_buf = vec![0u8; 1024];
-        let mut child_stderr_buf = vec![0u8; 1024];
+        let mut child_stdout_buf = [0u8; 1024];
+        let mut child_stderr_buf = [0u8; 1024];
 
         select! {
             res = child.wait() => {
@@ -55,20 +56,34 @@ async fn start_server(
             },
 
             res = child_stdout.read(&mut child_stdout_buf), if !stdout_finished => {
-                if res? == 0 {
+                let count = res?;
+
+                if count == 0 {
                     stdout_finished = true;
                     continue;
                 }
+
+                let bytes_read = &child_stdout_buf[..count];
+
+                history.push(bytes_read.to_owned());
+
                 // TODO: (potentially) encode before sending so that it only is encoded once
-                history.push(String::from_utf8_lossy(&child_stdout_buf).to_string());
-                let _ = sender.send(ServerMessage::Output(child_stdout_buf));
+                let _ = sender.send(ServerMessage::Output(bytes_read.to_owned()));
                 continue;
             }
 
-            res = child_stderr.read(&mut child_stderr_buf) => {
-                res?;
-                history.push(String::from_utf8_lossy(&child_stderr_buf).to_string());
-                let _ = sender.send(ServerMessage::Error(child_stderr_buf));
+            res = child_stderr.read(&mut child_stderr_buf), if !stderr_finished => {
+                let count = res?;
+
+                if count == 0 {
+                    stderr_finished = true;
+                    continue;
+                }
+
+                let bytes_read = &child_stdout_buf[..count];
+
+                history.push(bytes_read.to_owned());
+                let _ = sender.send(ServerMessage::Error(bytes_read.to_owned()));
                 continue;
             }
 
@@ -96,12 +111,9 @@ async fn start_server(
                             }
                         };
                     }
-                    ClientMessage::ProgramInput(mut bytes) => {
-                        history.push(String::from_utf8_lossy(&bytes).to_string());
+                    ClientMessage::ProgramInput(bytes) => {
+                        history.push(bytes.clone());
                         child_stdin.write_all(&bytes).await?;
-                        child_stdin.write_all(b"\n").await?;
-
-                        bytes.push(b'\n');
                         let _ = sender.send(ServerMessage::Output(bytes));
                     }
                 }
@@ -143,12 +155,6 @@ async fn server_lifecycle(
 
     res
 }
-
-// async fn unattached_client_loop(
-//     rw_pair: OwnedPair,
-//     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-// ) {
-// }
 
 enum ServeAction {
     Prompt,
@@ -268,7 +274,9 @@ async fn serve_client(
                 requets_sender.send(Request::GetHistory(tx))?;
 
                 let history = rx.await.unwrap_or_else(|err| {
-                    LineBuffer::from(vec![format!("Falied to produce history: {err:?}")])
+                    LineBuffer::from(vec![
+                        format!("Falied to produce history: {err:?}").into_bytes(),
+                    ])
                 });
 
                 write_message!(writer, ServerMessage::History(history)).await?;
