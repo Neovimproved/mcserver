@@ -1,9 +1,9 @@
 use std::{cell::UnsafeCell, io::IsTerminal, iter, mem};
 
-use color_eyre::eyre::eyre;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent};
 use futures::StreamExt;
 use mcserver_core::{ClientMessage, LineBuffer, ServerMessage, read_message, write_message};
+use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
@@ -12,11 +12,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-
-pub enum ExitReason {
-    ServerClosed,
-    ClientExit,
-}
 
 #[derive(Debug)]
 struct Cache<T> {
@@ -76,11 +71,12 @@ pub struct App {
 }
 
 macro_rules! stderr_log {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        #[cfg(debug_assertions)]
         if !std::io::stderr().is_terminal() {
             eprintln!($($arg)*);
         }
-    };
+    }};
 }
 
 impl App {
@@ -113,7 +109,7 @@ impl App {
         &mut self,
         key: KeyEvent,
         mut writer: impl AsyncWriteExt + Unpin,
-    ) -> color_eyre::Result<()> {
+    ) -> miette::Result<()> {
         match &mut self.mode {
             Mode::Selecting => match key.code {
                 KeyCode::Enter => {
@@ -122,7 +118,10 @@ impl App {
                         return Ok(());
                     };
 
-                    self.attach(name, writer).await?;
+                    self.attach(name, writer)
+                        .await
+                        .into_diagnostic()
+                        .context("Failed to attach to server")?;
                     self.mode = Mode::output(name.to_owned());
                 }
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
@@ -164,7 +163,9 @@ impl App {
                         writer,
                         ClientMessage::ProgramInput(mem::take(input).into_bytes())
                     )
-                    .await?
+                    .await
+                    .into_diagnostic()
+                    .context("Failed to send input to the server")?
                 }
                 KeyCode::Left => todo!("Implement cursor left"),
                 KeyCode::Right => todo!("Implement cursor right"),
@@ -196,7 +197,10 @@ impl App {
                     *escaping = false;
 
                     if name != selected_server {
-                        self.attach(selected_server, writer).await?;
+                        self.attach(selected_server, writer)
+                            .await
+                            .into_diagnostic()
+                            .context("Failed to attach to server")?;
                         self.mode = Mode::output(selected_server.to_owned());
                     }
                 }
@@ -228,23 +232,26 @@ impl App {
         &mut self,
         terminal: &mut DefaultTerminal,
         (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-    ) -> color_eyre::Result<ExitReason> {
+    ) -> miette::Result<()> {
         let mut event_reader = EventStream::new();
 
         loop {
             if self.exiting {
-                break Ok(ExitReason::ClientExit);
+                break Ok(());
             }
 
-            terminal.draw(|frame| self.render(frame))?;
+            terminal
+                .draw(|frame| self.render(frame))
+                .into_diagnostic()
+                .context("Failed to render tui")?;
 
             tokio::select! {
                 event = &mut event_reader.next() => {
                     let Some(event) = event else {
-                        break Err(eyre!("Failed to read from terminal"));
+                        bail!("Failed to read from terminal");
                     };
 
-                    let Event::Key(key) = event? else {
+                    let Event::Key(key) = event.into_diagnostic().context("Failed to read key input")? else {
                         // only care about those keys!!
                         continue;
                     };
@@ -258,13 +265,13 @@ impl App {
                         Err(err) => match err.kind() {
                             io::ErrorKind::UnexpectedEof => {
                                 stderr_log!("Server closed");
-                                break Ok(ExitReason::ServerClosed);
+                                return Err(err).into_diagnostic().wrap_err("Server connection severed");
                             },
-                            _ => return Err(err.into()),
+                            _ => return Err(err).into_diagnostic(),
                         },
                     };
 
-                    match read_message!(reader, length).await? {
+                    match read_message!(reader, length).await.into_diagnostic().context("Failed to receive message from server")? {
                         ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
                         ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
 
@@ -305,6 +312,14 @@ impl App {
     }
 
     fn render(&self, frame: &mut Frame) {
+        // Hella dark:
+        // 26, 27, 38
+        //
+        // 30, 31, 42
+        // let background_block = Block::new().style(Style::new().bg(Color::Rgb(30, 31, 42)));
+        //
+        // frame.render_widget(background_block, frame.area());
+
         let Mode::Output {
             input,
             output,
