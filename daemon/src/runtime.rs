@@ -24,8 +24,6 @@ async fn start_server(
     mut request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
 ) -> color_eyre::Result<()> {
-    println!("Server started");
-
     let mut history: LineBuffer = LineBuffer::new();
 
     let mut child_stdin = child
@@ -43,6 +41,8 @@ async fn start_server(
         .take()
         .ok_or_else(|| eyre!("Unable to take stderr from child"))?;
 
+    let mut stdout_finished = false;
+
     loop {
         let mut child_stdout_buf = vec![0u8; 1024];
         let mut child_stderr_buf = vec![0u8; 1024];
@@ -54,8 +54,11 @@ async fn start_server(
                 break;
             },
 
-            res = child_stdout.read(&mut child_stdout_buf) => {
-                res?;
+            res = child_stdout.read(&mut child_stdout_buf), if !stdout_finished => {
+                if res? == 0 {
+                    stdout_finished = true;
+                    continue;
+                }
                 // TODO: (potentially) encode before sending so that it only is encoded once
                 history.push(String::from_utf8_lossy(&child_stdout_buf).to_string());
                 let _ = sender.send(ServerMessage::Output(child_stdout_buf));
@@ -93,10 +96,13 @@ async fn start_server(
                             }
                         };
                     }
-                    ClientMessage::ProgramInput(bytes) => {
+                    ClientMessage::ProgramInput(mut bytes) => {
                         history.push(String::from_utf8_lossy(&bytes).to_string());
                         child_stdin.write_all(&bytes).await?;
                         child_stdin.write_all(b"\n").await?;
+
+                        bytes.push(b'\n');
+                        let _ = sender.send(ServerMessage::Output(bytes));
                     }
                 }
             }
@@ -124,6 +130,7 @@ async fn server_lifecycle(
     child: Child,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> color_eyre::Result<()> {
+    println!("Starting {name}");
     let res = start_server(child, message_receiver, request_receiver, sender).await;
 
     if let Err(err) = &res {
@@ -188,7 +195,16 @@ async fn serve_client(
         match action {
             ServeAction::Prompt => {
                 let name = &loop {
-                    let message: ClientMessage = read_message!(reader).await?;
+                    let message: ClientMessage = match read_message!(reader).await {
+                        Ok(message) => message,
+                        Err(mcserver_core::Error::Io(err))
+                            if err.kind() == io::ErrorKind::UnexpectedEof =>
+                        {
+                            println!("Most graceful client disconnect");
+                            return Ok(());
+                        }
+                        Err(err) => return Err(err).wrap_err("Erroneous client disconnect"),
+                    };
 
                     match message {
                         ClientMessage::Attach { name } => break name,
@@ -219,7 +235,7 @@ async fn serve_client(
                         let (client_request_sender, client_request_receiver) = unbounded_channel();
 
                         let (server_message_sender, server_message_receiver) =
-                            broadcast::channel(1024);
+                            broadcast::channel(4096);
 
                         server_communicators.insert(
                             name.to_owned(),
@@ -305,8 +321,6 @@ async fn serve_client(
 }
 
 pub async fn main() -> color_eyre::Result<()> {
-    println!("Doing things...");
-
     if let Err(err) = fs::remove_file(SOCKET_PATH).await
         && err.kind() != io::ErrorKind::NotFound
     {
@@ -333,7 +347,7 @@ pub async fn main() -> color_eyre::Result<()> {
                 tokio::spawn(async move {
                     let (stream, addr) = res?;
 
-                    println!("Connected to client by TCP: {addr}");
+                    println!("Connected to client by tcp: {addr}");
 
                     if let Err(err) = serve_client(OwnedPair::tcp(stream.into_split()), &server_communicators).await {
                         eprintln!("{err:?}");
@@ -349,7 +363,7 @@ pub async fn main() -> color_eyre::Result<()> {
                 tokio::spawn(async move {
                     let (stream, addr) = res?;
 
-                    println!("Connected to client by Unix socket: {addr:?}");
+                    println!("Connected to client by unix socket: {addr:?}");
 
                     if let Err(err) = serve_client(OwnedPair::unix(stream.into_split()), &server_communicators).await {
                         eprintln!("{err:?}");
