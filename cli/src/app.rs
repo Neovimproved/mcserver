@@ -7,9 +7,9 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 
@@ -155,8 +155,6 @@ impl App {
                     output_text.invalidate();
                 }
                 KeyCode::Enter => {
-                    output.push(input.to_string());
-                    stderr_log!("Pushed {input}!!");
                     output_text.invalidate();
 
                     write_message!(
@@ -281,8 +279,8 @@ impl App {
                         ServerMessage::AlreadyStarted => stderr_log!("The server has already started apparently"),
                         ServerMessage::NotAttached => stderr_log!("The server has not yet started apparently"),
                         ServerMessage::Output(bytes) => if let Mode::Output { output, output_text, .. } = &mut self.mode {
-                            let mut line = String::from_utf8_lossy(&bytes).to_string();
-                            line.pop();
+                            stderr_log!("Btw, got {}", str::from_utf8(&bytes).unwrap_or("couldn't nonvert"));
+                            let line = String::from_utf8_lossy(&bytes).to_string();
                             output.push(line);
                             output_text.invalidate();
                         },
@@ -316,9 +314,13 @@ impl App {
         // 26, 27, 38
         //
         // 30, 31, 42
-        // let background_block = Block::new().style(Style::new().bg(Color::Rgb(30, 31, 42)));
         //
-        // frame.render_widget(background_block, frame.area());
+        // Very light, neutral, middle ground, valid color
+        // 46, 52, 64
+
+        let background_block = Block::new().style(Style::new().bg(Color::Rgb(46, 52, 64)));
+
+        frame.render_widget(background_block, frame.area());
 
         let Mode::Output {
             input,
@@ -327,38 +329,53 @@ impl App {
             ..
         } = &self.mode
         else {
-            frame.render_widget(Clear, frame.area());
             frame.render_widget(self.draw_servers_list_widget(), frame.area());
             return;
         };
 
-        let lines_available = frame
-            .area()
-            .height
-            // 2 for the border, 1 for input line
-            .saturating_sub(3) as usize;
-
-        let output_widget = List::new(
-            output
-                .iter()
-                .skip(output.len().saturating_sub(lines_available))
-                .map(|line| ListItem::new(Line::from(Span::from(line))))
-                .chain(iter::once(ListItem::new(Line::from(Span::from(
-                    input.as_str(),
-                ))))),
-        )
-        .block(Block::new().title("Output").borders(Borders::ALL));
-
-        if *escaping {
+        let output_area = if *escaping {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                 .split(frame.area());
 
             frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
 
-            frame.render_widget(output_widget, main_sections[1]);
+            main_sections[1]
         } else {
-            frame.render_widget(output_widget, frame.area());
-        }
+            frame.area()
+        };
+
+        let output_text_width = output_area.width.saturating_sub(2) as usize;
+        let lines_available = output_area.height.saturating_sub(2) as usize;
+
+        let mut output_text = output
+            .iter()
+            // use skip here to get the maximum number of lines that might need to be used
+            // Then, the lines that aren't used will simply not be rendered
+            .skip(output.len().saturating_sub(lines_available))
+            .fold(String::new(), |mut acc, item| {
+                acc.push_str(item);
+                // acc.push('\n');
+                acc
+            });
+
+        output_text.push_str(input);
+
+        let lines = output_text
+            .split('\n')
+            .flat_map(|line| textwrap::wrap(line, output_text_width))
+            .count();
+
+        // stderr_log!(
+        //     "Last 10 characters: '{}'",
+        //     &output_text[output_text.len().saturating_sub(11)..output_text.len()]
+        // );
+
+        let output_widget = Paragraph::new(output_text)
+            .block(Block::new().title("Output").borders(Borders::ALL))
+            .wrap(Wrap { trim: false })
+            .scroll((lines.saturating_sub(lines_available) as u16, 0));
+
+        frame.render_widget(output_widget, output_area);
     }
 
     fn selection_mode(&mut self) {
