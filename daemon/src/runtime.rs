@@ -16,7 +16,7 @@ use tokio::{
     },
 };
 
-use crate::types::{OwnedPair, Request, ServerCommunicator};
+use crate::types::{Request, ServerCommunicator};
 
 async fn start_server(
     mut child: Child,
@@ -184,17 +184,10 @@ fn create_command(name: &str) -> color_eyre::Result<Command> {
 }
 
 async fn serve_client(
-    rw_pair: OwnedPair,
+    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
 ) -> color_eyre::Result<()> {
     #[allow(unreachable_code)]
-    let (mut reader, mut writer) = match rw_pair {
-        OwnedPair::UnixSocket(owned_read_half, owned_write_half) => {
-            (owned_read_half, owned_write_half)
-        }
-        OwnedPair::TcpConnection(..) => todo!(),
-    };
-
     let mut action = ServeAction::Prompt;
 
     loop {
@@ -353,11 +346,11 @@ pub async fn main() -> color_eyre::Result<()> {
                 let server_communicators = server_communicators.clone();
 
                 tokio::spawn(async move {
-                    let (stream, addr) = res?;
+                    let (mut stream, addr) = res?;
 
                     println!("Connected to client by tcp: {addr}");
 
-                    if let Err(err) = serve_client(OwnedPair::tcp(stream.into_split()), &server_communicators).await {
+                    if let Err(err) = serve_client(stream.split(), &server_communicators).await {
                         eprintln!("{err:?}");
                     }
 
@@ -369,11 +362,11 @@ pub async fn main() -> color_eyre::Result<()> {
                 let server_communicators = server_communicators.clone();
 
                 tokio::spawn(async move {
-                    let (stream, addr) = res?;
+                    let (mut stream, addr) = res?;
 
                     println!("Connected to client by unix socket: {addr:?}");
 
-                    if let Err(err) = serve_client(OwnedPair::unix(stream.into_split()), &server_communicators).await {
+                    if let Err(err) = serve_client(stream.split(), &server_communicators).await {
                         eprintln!("{err:?}");
                     }
 
