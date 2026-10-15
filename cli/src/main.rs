@@ -1,15 +1,17 @@
 use clap::Parser;
 use miette::Context;
+use tokio::net::TcpStream;
 
 use crate::{
     app::App,
     args::Args,
-    terminal::{GuardedTerminal, try_connect_unix_socket},
+    terminal::{GuardedTerminal, try_connect_tcp, try_connect_unix_socket},
 };
 
 mod app;
 mod args;
 mod terminal;
+mod types;
 
 #[tokio::main]
 async fn main() -> miette::Result<()> {
@@ -18,13 +20,23 @@ async fn main() -> miette::Result<()> {
     match args.command {
         Some(..) => todo!(),
         None => {
-            let stream = try_connect_unix_socket()
-                .await
-                .context("Failed to connect to unix stream")?;
+            if let Some(ip_addr) = args.tcp {
+                let mut stream = try_connect_tcp(ip_addr)
+                    .await
+                    .wrap_err("Failed to connect to tcp stream")?;
 
-            App::new()
-                .run(&mut GuardedTerminal::new(), stream.into_split())
-                .await?
+                App::new()
+                    .run(&mut GuardedTerminal::new(), stream.split())
+                    .await
+            } else {
+                let mut stream = try_connect_unix_socket()
+                    .await
+                    .wrap_err("Failed to connect to unix stream")?;
+
+                App::new()
+                    .run(&mut GuardedTerminal::new(), stream.split())
+                    .await
+            }?
         }
     }
 

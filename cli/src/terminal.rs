@@ -1,15 +1,13 @@
 use std::{
     env::current_exe,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     ops::{Deref, DerefMut},
     path::PathBuf,
-    str::FromStr,
     time::Duration,
 };
 
-use const_format::formatcp;
-use mcserver_core::{LOCAL_TCP_ADDR, SOCKET_PATH};
-use miette::{Context, IntoDiagnostic};
+use mcserver_core::{SOCKET_PATH, TCP_PORT};
+use miette::{Context, IntoDiagnostic, bail};
 use ratatui::DefaultTerminal;
 use tokio::{
     fs, io,
@@ -20,52 +18,72 @@ use tokio::{
 
 const DAEMON_EXECUTABLE_NAME: &str = "mcserver-daemon";
 
-async fn find_possible_path() -> io::Result<Option<PathBuf>> {
-    if let Some(exe_parent) = current_exe()?.parent() {
-        let path = exe_parent.join(DAEMON_EXECUTABLE_NAME);
+async fn find_possible_path() -> miette::Result<PathBuf> {
+    let daemon_path = fs::canonicalize(
+        current_exe()
+            .into_diagnostic()
+            .wrap_err("Failed to get path of current executable")?,
+    )
+    .await
+    .into_diagnostic()
+    .wrap_err("Failed to canonicalize executable path")?
+    .parent()
+    .wrap_err("Failed to get parent of executable path")?
+    .join(DAEMON_EXECUTABLE_NAME);
 
-        if fs::try_exists(&path).await? {
-            return Ok(Some(path));
-        }
+    if fs::try_exists(&daemon_path)
+        .await
+        .into_diagnostic()
+        .wrap_err("Failed to check if daemon exists")?
+    {
+        return Ok(daemon_path);
     }
 
-    let path = formatcp!("./{DAEMON_EXECUTABLE_NAME}");
-
-    if fs::try_exists(path).await? {
-        Ok(Some(PathBuf::from(path)))
-    } else {
-        Ok(None)
+    if !fs::try_exists(&daemon_path)
+        .await
+        .into_diagnostic()
+        .wrap_err("Failed to check if daemon executable exists")?
+    {
+        bail!("Failed to find a path for the daemon");
     }
+
+    Ok(daemon_path)
+}
+
+async fn spin_up_server_instance() -> miette::Result<()> {
+    let mut cmd = Command::new(
+        find_possible_path()
+            .await
+            .wrap_err("Failed to find daemon executable path")?,
+    );
+
+    cmd.status()
+        .await
+        .into_diagnostic()
+        .wrap_err("Failed to spin up server instance")?;
+
+    Ok(())
 }
 
 pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
+    eprintln!("Unix connecting...");
     let stream = match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => stream,
         Err(err) => match err.kind() {
             io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused => {
                 // spin it up!! 🕸️
-                let mut cmd = Command::new(
-                    find_possible_path()
-                        .await
-                        .into_diagnostic()?
-                        .context("Failed to find daemon executable path")?,
-                );
-
-                cmd.status()
-                    .await
-                    .into_diagnostic()
-                    .context("Failed to spin up server instance")?;
+                spin_up_server_instance().await?;
 
                 sleep(Duration::from_millis(100)).await;
                 UnixStream::connect(SOCKET_PATH)
                     .await
                     .into_diagnostic()
-                    .context("Failed to connect to unix stream")?
+                    .wrap_err("Failed to connect to unix stream")?
             }
             _ => {
                 return Err(err)
                     .into_diagnostic()
-                    .context("Failed to connect to unix stream");
+                    .wrap_err("Failed to connect to unix stream");
             }
         },
     };
@@ -73,19 +91,26 @@ pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
     Ok(stream)
 }
 
-pub async fn try_connect_tcp(addr: Option<&str>) -> miette::Result<TcpStream> {
-    let stream = TcpStream::connect(
-        addr.map(SocketAddr::from_str)
-            .transpose()
-            .into_diagnostic()
-            .context("Failed to convert address")?
-            .unwrap_or(LOCAL_TCP_ADDR),
-    )
-    .await
-    .into_diagnostic()
-    .context("Failed to connect to TCP stream")?;
+pub async fn try_connect_tcp(ip_addr: IpAddr) -> miette::Result<TcpStream> {
+    let socket_addr = SocketAddr::new(ip_addr, TCP_PORT);
 
-    Ok(stream)
+    if ip_addr.is_loopback() {
+        match TcpStream::connect(socket_addr).await {
+            Ok(stream) => Ok(stream),
+            Err(err) => match err.kind() {
+                io::ErrorKind::ConnectionRefused => {
+                    spin_up_server_instance().await?;
+                    sleep(Duration::from_millis(100)).await;
+                    TcpStream::connect(socket_addr).await
+                }
+                _ => Err(err),
+            },
+        }
+    } else {
+        TcpStream::connect(socket_addr).await
+    }
+    .into_diagnostic()
+    .wrap_err("Failed to connect to TCP stream")
 }
 
 pub struct GuardedTerminal {
