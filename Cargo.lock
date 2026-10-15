@@ -1157,6 +1157,7 @@ dependencies = [
  "daemonize2",
  "dashmap",
  "mcserver-core",
+ "pty-process",
  "tokio",
 ]
 
@@ -1541,6 +1542,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "200b9ff220857e53e184257720a14553b2f4aa02577d2ed9842d45d4b9654810"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "pty-process"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71cec9e2670207c5ebb9e477763c74436af3b9091dd550b9fb3c1bec7f3ea266"
+dependencies = [
+ "rustix",
+ "tokio",
 ]
 
 [[package]]

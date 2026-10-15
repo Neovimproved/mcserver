@@ -1,13 +1,14 @@
-use std::{env, process::Stdio, sync::Arc};
+use std::{env, sync::Arc};
 
 use color_eyre::eyre::{Context, ContextCompat, eyre};
 use dashmap::DashMap;
 use mcserver_core::*;
+use pty_process::{Command, Pty};
 use tokio::{
     fs,
     io::{self, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, UnixListener},
-    process::{Child, Command},
+    process::Child,
     select,
     sync::{
         broadcast,
@@ -19,34 +20,19 @@ use tokio::{
 use crate::types::{Request, ServerCommunicator};
 
 async fn start_server(
-    mut child: Child,
+    name: &str,
     mut message_receiver: UnboundedReceiver<ClientMessage>,
     mut request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
 ) -> color_eyre::Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
-    let mut child_stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| eyre!("Unable to take stdin from child"))?;
-
-    let mut child_stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| eyre!("Unable to take stdout from child"))?;
-
-    let mut child_stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| eyre!("Unable to take stderr from child"))?;
+    let (mut pty, mut child) = spawn_server_process(name)?;
 
     let mut stdout_finished = false;
-    let mut stderr_finished = false;
 
     loop {
-        let mut child_stdout_buf = [0u8; 1024];
-        let mut child_stderr_buf = [0u8; 1024];
+        let mut stdout_buf = [0u8; 1024];
 
         select! {
             res = child.wait() => {
@@ -55,7 +41,7 @@ async fn start_server(
                 break;
             },
 
-            res = child_stdout.read(&mut child_stdout_buf), if !stdout_finished => {
+            res = pty.read(&mut stdout_buf), if !stdout_finished => {
                 let count = res?;
 
                 if count == 0 {
@@ -63,27 +49,12 @@ async fn start_server(
                     continue;
                 }
 
-                let bytes_read = &child_stdout_buf[..count];
+                let bytes_read = &stdout_buf[..count];
 
                 history.push(bytes_read.to_owned());
 
                 // TODO: (potentially) encode before sending so that it only is encoded once
                 let _ = sender.send(ServerMessage::Output(bytes_read.to_owned()));
-                continue;
-            }
-
-            res = child_stderr.read(&mut child_stderr_buf), if !stderr_finished => {
-                let count = res?;
-
-                if count == 0 {
-                    stderr_finished = true;
-                    continue;
-                }
-
-                let bytes_read = &child_stdout_buf[..count];
-
-                history.push(bytes_read.to_owned());
-                let _ = sender.send(ServerMessage::Error(bytes_read.to_owned()));
                 continue;
             }
 
@@ -113,8 +84,7 @@ async fn start_server(
                     }
                     ClientMessage::ProgramInput(bytes) => {
                         history.push(bytes.clone());
-                        child_stdin.write_all(&bytes).await?;
-                        let _ = sender.send(ServerMessage::Output(bytes));
+                        pty.write_all(&bytes).await?;
                     }
                 }
             }
@@ -139,11 +109,10 @@ async fn server_lifecycle(
     message_receiver: UnboundedReceiver<ClientMessage>,
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
-    child: Child,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> color_eyre::Result<()> {
     println!("Starting {name}");
-    let res = start_server(child, message_receiver, request_receiver, sender).await;
+    let res = start_server(&name, message_receiver, request_receiver, sender).await;
 
     if let Err(err) = &res {
         eprintln!("Server: {name} btwwwwww\n{err:?}");
@@ -161,7 +130,10 @@ enum ServeAction {
     Attach(String),
 }
 
-fn create_command(name: &str) -> color_eyre::Result<Command> {
+fn spawn_server_process(_name: &str) -> color_eyre::Result<(Pty, Child)> {
+    let (pty, pts) = pty_process::open()?;
+    pty.resize(pty_process::Size::new(24, 80))?;
+
     let mut process_path = env::home_dir().wrap_err("Failed to get home directory")?;
 
     process_path.extend([
@@ -172,15 +144,10 @@ fn create_command(name: &str) -> color_eyre::Result<Command> {
         "example-terminal-app",
     ]);
 
-    let mut command = Command::new(process_path);
+    let child = Command::new(process_path).spawn(pts)?;
 
-    command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .arg(format!("{name} echoes "));
-
-    Ok(command)
+    // pts (slave thing) can be dropped
+    Ok((pty, child))
 }
 
 async fn serve_client(
@@ -227,8 +194,6 @@ async fn serve_client(
                         com.server_message_sender.subscribe(),
                     ),
                     None => {
-                        let child = create_command(&name)?.spawn()?;
-
                         let (client_message_sender, client_message_receiver) = unbounded_channel();
 
                         let (client_request_sender, client_request_receiver) = unbounded_channel();
@@ -250,7 +215,6 @@ async fn serve_client(
                             client_message_receiver,
                             client_request_receiver,
                             server_message_sender.clone(),
-                            child,
                             server_communicators.clone(),
                         ));
 

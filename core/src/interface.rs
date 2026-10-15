@@ -57,9 +57,6 @@ pub enum ServerMessage {
     #[display("Output from the server: {}", display_bytes(_0))]
     Output(Vec<u8>),
 
-    #[display("Stderr from the application: {}", display_bytes(_0))]
-    Error(Vec<u8>),
-
     #[display("Line history sent:\n{}", _0.iter().fold(String::new(), |mut acc, vec| {
         acc.push_str(&display_bytes(vec));
         acc.push('\n');

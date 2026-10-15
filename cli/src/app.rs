@@ -167,44 +167,47 @@ impl App {
             },
 
             // Escaping output
-            Mode::Console { name, state, .. } if let ServerState::Dead = state => match key.code {
-                KeyCode::Backspace => todo!(),
-                KeyCode::Enter => {
-                    let Some(selected_server) = self.servers.get(self.selected_server) else {
-                        // TODO: ig this is an error
-                        return Ok(());
-                    };
+            Mode::Console { name, state, .. } if let ServerState::Escaping = state => {
+                match key.code {
+                    KeyCode::Backspace => todo!(),
+                    KeyCode::Enter => {
+                        let Some(selected_server) = self.servers.get(self.selected_server) else {
+                            // TODO: ig this is an error
+                            return Ok(());
+                        };
 
-                    *state = ServerState::Normal;
+                        *state = ServerState::Normal;
 
-                    if name != selected_server {
-                        self.request_attach(selected_server, writer)
-                            .await
-                            .into_diagnostic()
-                            .wrap_err("Failed to attach to server")?;
+                        if name != selected_server {
+                            self.request_attach(selected_server, writer)
+                                .await
+                                .into_diagnostic()
+                                .wrap_err("Failed to attach to server")?;
 
-                        self.mode = Mode::output(self.selected_server, selected_server.to_owned());
+                            self.mode =
+                                Mode::output(self.selected_server, selected_server.to_owned());
+                        }
                     }
+                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+
+                    KeyCode::Tab => {
+                        *state = ServerState::Normal;
+                    }
+
+                    KeyCode::BackTab => self.selection_mode(),
+
+                    KeyCode::Char('q') => self.exit(),
+
+                    KeyCode::Delete => todo!(),
+                    KeyCode::Insert => todo!(),
+                    KeyCode::F(_) => todo!(),
+                    KeyCode::Char(_) => todo!(),
+                    KeyCode::Null => todo!(),
+                    KeyCode::Esc => self.selection_mode(),
+                    _ => {}
                 }
-                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
-
-                KeyCode::Tab => {
-                    *state = ServerState::Normal;
-                }
-
-                KeyCode::BackTab => self.selection_mode(),
-
-                KeyCode::Char('q') => self.exit(),
-
-                KeyCode::Delete => todo!(),
-                KeyCode::Insert => todo!(),
-                KeyCode::F(_) => todo!(),
-                KeyCode::Char(_) => todo!(),
-                KeyCode::Null => todo!(),
-                KeyCode::Esc => self.selection_mode(),
-                _ => {}
-            },
+            }
 
             Mode::Console {
                 input,
@@ -244,8 +247,9 @@ impl App {
                         )
                         .await
                         .into_diagnostic()?;
+                    } else {
+                        input.push(ch);
                     }
-                    input.push(ch);
                     // output_text.invalidate();
                 }
                 KeyCode::Esc => {
@@ -321,10 +325,6 @@ impl App {
                             output.push(display_bytes(&bytes).to_string());
                             // output_text.invalidate();
                         },
-                        ServerMessage::Error(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
-                            output.push(display_bytes(&bytes).to_string());
-                            // output_text.invalidate();
-                        }
                         ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
                             history.into_iter().for_each(|line|{
                                 output.push(display_bytes(&line).to_string())
@@ -420,7 +420,7 @@ impl App {
             // Then, the lines that aren't used will simply not be rendered
             .skip((output.len()).saturating_sub(output_lines_available.saturating_sub(1)))
             .fold(String::new(), |mut acc, item| {
-                acc.push_str(&item);
+                acc.push_str(item);
                 // acc.push('\n');
                 acc
             });
