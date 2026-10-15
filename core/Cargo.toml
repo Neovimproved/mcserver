@@ -10,3 +10,4 @@ license = "MIT"
 bitcode = { workspace = true }
 derive_more = { workspace = true, features = ["display", "error", "from"] }
 const_format = { workspace = true }
+kdl = "6.7.1"
