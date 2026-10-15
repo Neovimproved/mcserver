@@ -133,7 +133,7 @@ impl App {
                     self.request_attach(name, writer)
                         .await
                         .into_diagnostic()
-                        .context("Failed to attach to server")?;
+                        .wrap_err("Failed to attach to server")?;
 
                     self.mode = Mode::output(self.selected_server, name.to_owned());
                 }
@@ -181,7 +181,7 @@ impl App {
                         self.request_attach(selected_server, writer)
                             .await
                             .into_diagnostic()
-                            .context("Failed to attach to server")?;
+                            .wrap_err("Failed to attach to server")?;
 
                         self.mode = Mode::output(self.selected_server, selected_server.to_owned());
                     }
@@ -226,7 +226,7 @@ impl App {
                     )
                     .await
                     .into_diagnostic()
-                    .context("Failed to send input to the server")?
+                    .wrap_err("Failed to send input to the server")?
                 }
                 KeyCode::Left => todo!("Implement cursor left"),
                 KeyCode::Right => todo!("Implement cursor right"),
@@ -278,7 +278,7 @@ impl App {
             terminal
                 .draw(|frame| self.render(frame))
                 .into_diagnostic()
-                .context("Failed to render tui")?;
+                .wrap_err("Failed to render tui")?;
 
             tokio::select! {
                 event = &mut event_reader.next() => {
@@ -286,7 +286,7 @@ impl App {
                         bail!("Failed to read from terminal");
                     };
 
-                    let Event::Key(key) = event.into_diagnostic().context("Failed to read key input")? else {
+                    let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
                         // only care about those keys!!
                         continue;
                     };
@@ -306,7 +306,7 @@ impl App {
                         },
                     };
 
-                    match read_message!(reader, length).await.into_diagnostic().context("Failed to receive message from server")? {
+                    match read_message!(reader, length).await.into_diagnostic().wrap_err("Failed to receive message from server")? {
                         ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
                         ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
                         ServerMessage::Closed => if let Mode::Console { input, state, .. } = &mut self.mode {
