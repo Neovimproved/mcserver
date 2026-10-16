@@ -8,6 +8,11 @@ license = "MIT"
 
 [dependencies]
 bitcode = { workspace = true }
-derive_more = { workspace = true, features = ["display", "error", "from"] }
 const_format = { workspace = true }
-kdl = "6.7.1"
+derive_more = { workspace = true, features = ["display", "error", "from"] }
+dirs = "7.0.0"
+kdl = { workspace = true }
+ratatui = { workspace = true }
+serde = "1.0.229"
+shellexpand = "3.1.2"
+tokio = { workspace = true }

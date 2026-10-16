@@ -13,3 +13,8 @@ pub const SOCKET_PATH: &str = formatcp!("{TEMP_DIR}/mcserver.sock");
 
 // 1MiB
 pub const MAX_MESSAGE_LENGTH: usize = 1024 * 1024;
+
+pub const CONFIG_DIRECTORY_NAME: &str = "mcserver";
+pub const CONFIG_FILE_NAME: &str = "config.kdl";
+
+pub const DEFAULT_SERVERS_DIRECTORY: &str = "~/Servers";
