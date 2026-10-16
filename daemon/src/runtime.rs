@@ -7,7 +7,7 @@ use color_eyre::{
 use dashmap::DashMap;
 use mcserver_core::{
     ClientMessage, Config, LOCAL_TCP_ADDR, LineBuffer, MAX_MESSAGE_LENGTH, SOCKET_PATH,
-    ServerMessage, config, metadata, read_message, write_message,
+    ServerMessage, config, display_path, metadata, read_message, write_message,
 };
 use pty_process::{Command, Pty};
 use tokio::{
@@ -33,11 +33,12 @@ async fn spawn_server_process(
     let (pty, pts) = pty_process::open()?;
     pty.resize(pty_process::Size::new(24, 80))?;
 
-    let server_dir = PathBuf::from(config.servers_directory.to_string());
+    let mut server_dir = PathBuf::from(config.servers_directory.to_string());
+    server_dir.push(name);
 
     let child = Command::new("java")
         .arg("-jar")
-        .arg(dbg!(metadata::get_jar_file(server_dir.join(name)).await?))
+        .arg(metadata::get_jar_file(server_dir.clone()).await?)
         .args(flags)
         .current_dir(server_dir)
         .spawn(pts)?;
