@@ -39,6 +39,7 @@ async fn spawn_server_process(
         .arg("-jar")
         .arg(dbg!(metadata::get_jar_file(server_dir.join(name)).await?))
         .args(flags)
+        .current_dir(server_dir)
         .spawn(pts)?;
 
     // pts (slave thing) can be dropped
