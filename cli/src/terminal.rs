@@ -44,7 +44,9 @@ async fn find_possible_path() -> miette::Result<PathBuf> {
         .into_diagnostic()
         .wrap_err("Failed to check if daemon executable exists")?
     {
-        bail!("Failed to find a path for the daemon");
+        bail!(
+            "Failed to find a path for the daemon. Have you installed it? (try cargo install mcserver-daemon)"
+        );
     }
 
     Ok(daemon_path)
@@ -54,7 +56,7 @@ async fn spin_up_server_instance() -> miette::Result<()> {
     let mut cmd = Command::new(
         find_possible_path()
             .await
-            .wrap_err("Failed to find daemon executable path")?,
+            .wrap_err("Daemon binary not found")?,
     );
 
     cmd.status()
