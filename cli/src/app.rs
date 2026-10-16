@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, io::IsTerminal, mem};
+use std::{io::IsTerminal, mem, path::PathBuf};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
@@ -15,6 +15,8 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+
+use crate::servers;
 
 #[derive(Debug)]
 enum ServerState {
@@ -56,6 +58,7 @@ pub struct App {
     exiting: bool,
 }
 
+#[macro_export]
 macro_rules! stderr_log {
     ($($arg:tt)*) => {{
         #[cfg(debug_assertions)]
@@ -89,7 +92,16 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to create/read config")?;
 
-        // let servers =
+        stderr_log!("{config:?}");
+
+        let servers = servers::read(config.servers_directory.as_ref())
+            .await?
+            .into_iter()
+            .map(PathBuf::into_string)
+            .collect::<Result<Vec<String>, PathBuf>>()
+            // TODO: put question mark symbols where there is non utf-8 data
+            .map_err(mcserver_core::Error::NonUtf8Path)
+            .into_diagnostic()?;
 
         Ok(Self {
             config,
@@ -107,11 +119,7 @@ impl App {
         server_name: impl Into<String>,
     ) -> io::Result<()> {
         let name = server_name.into();
-        write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
-
-        stderr_log!("Hello, world!");
-
-        Ok(())
+        write_message!(writer, ClientMessage::Attach { name: name.clone() }).await
     }
 
     pub async fn handle_keycode(
@@ -294,7 +302,6 @@ impl App {
                         ServerMessage::AlreadyStarted => stderr_log!("The server has already started apparently"),
                         ServerMessage::NotAttached => stderr_log!("The server has not yet started apparently"),
                         ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
-                            stderr_log!("Btw, got {}", str::from_utf8(&bytes).unwrap_or("couldn't nonvert"));
                             output.push(display_bytes(&bytes).to_string());
                         },
                         ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {

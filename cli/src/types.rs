@@ -8,6 +8,7 @@ use std::{
     str::FromStr,
 };
 
+use derive_more::Display;
 use miette::{Context, IntoDiagnostic};
 
 // Order:
@@ -15,7 +16,8 @@ use miette::{Context, IntoDiagnostic};
 // owning/consuming
 // borrowing/referencing
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Display)]
+#[display("{_0}")]
 pub struct ServerArgument(String);
 
 impl ServerArgument {
@@ -32,9 +34,9 @@ impl ServerArgument {
     }
 }
 
-impl Into<String> for ServerArgument {
-    fn into(self) -> String {
-        self.0
+impl From<ServerArgument> for String {
+    fn from(value: ServerArgument) -> Self {
+        value.0
     }
 }
 
@@ -43,12 +45,6 @@ impl FromStr for ServerArgument {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.to_string()))
-    }
-}
-
-impl ToString for ServerArgument {
-    fn to_string(&self) -> String {
-        self.0.to_string()
     }
 }
 

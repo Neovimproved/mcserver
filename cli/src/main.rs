@@ -11,6 +11,7 @@ use crate::{
 
 mod app;
 mod args;
+mod servers;
 mod terminal;
 mod types;
 
