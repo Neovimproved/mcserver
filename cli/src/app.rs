@@ -2,8 +2,10 @@ use std::{cell::UnsafeCell, io::IsTerminal, mem};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
+use kdl::KdlDocument;
 use mcserver_core::{
-    ClientMessage, LineBuffer, ServerMessage, display_bytes, read_message, write_message,
+    ClientMessage, Config, LineBuffer, ServerMessage, config, display_bytes, read_message,
+    write_message,
 };
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
@@ -13,34 +15,6 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-
-#[derive(Debug)]
-struct Cache<T> {
-    value: UnsafeCell<Option<T>>,
-}
-
-#[allow(unused)]
-impl<T> Cache<T> {
-    pub fn new() -> Self {
-        Self {
-            value: UnsafeCell::new(None),
-        }
-    }
-
-    pub fn invalidate(&mut self) -> Option<T> {
-        self.value.get_mut().take()
-    }
-
-    #[allow(unused)]
-    pub fn get_or_set(&self, set: impl FnOnce() -> T) -> &T {
-        unsafe { (*self.value.get()).get_or_insert_with(set) }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_or_set_mut(&mut self, set: impl FnOnce() -> T) -> &mut T {
-        self.value.get_mut().get_or_insert_with(set)
-    }
-}
 
 #[derive(Debug)]
 enum ServerState {
@@ -58,7 +32,6 @@ enum Mode {
         input: String,
         output: LineBuffer,
         state: ServerState,
-        // output_text: Cache<String>,
     },
 }
 
@@ -70,15 +43,16 @@ impl Mode {
             input: String::new(),
             output: LineBuffer::new(),
             state: ServerState::Normal,
-            // output_text: Cache::new(),
         }
     }
 }
 
 pub struct App {
+    config: Config,
+    mode: Mode,
+    document: Option<KdlDocument>,
     servers: Vec<String>,
     selected_server: usize,
-    mode: Mode,
     exiting: bool,
 }
 
@@ -91,23 +65,46 @@ macro_rules! stderr_log {
     }};
 }
 
+macro_rules! try_attach {
+    ($app:ident, $writer:expr) => {{
+        let name = $app
+            .servers
+            .get($app.selected_server)
+            .wrap_err("Invalid server index")?
+            .clone();
+
+        $app.request_attach($writer, name.clone())
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to attach to server")?;
+
+        $app.mode = Mode::output($app.selected_server, name);
+    }};
+}
+
 impl App {
-    pub fn new() -> Self {
-        Self {
-            servers: ["ChaosCraft", "DonutSMP", "Hypixel"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+    pub async fn try_new() -> miette::Result<Self> {
+        let (config, document) = config::read()
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to create/read config")?;
+
+        // let servers =
+
+        Ok(Self {
+            config,
+            document,
+            servers,
             selected_server: 0usize,
             mode: Mode::Selecting,
             exiting: false,
-        }
+        })
     }
 
     pub async fn request_attach(
         &self,
-        server_name: impl Into<String>,
         mut writer: impl AsyncWriteExt + Unpin,
+        server_name: impl Into<String>,
     ) -> io::Result<()> {
         let name = server_name.into();
         write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
@@ -125,17 +122,7 @@ impl App {
         match &mut self.mode {
             Mode::Selecting => match key.code {
                 KeyCode::Enter => {
-                    let Some(name) = self.servers.get(self.selected_server) else {
-                        stderr_log!("This should not happen! There is no server selected");
-                        return Ok(());
-                    };
-
-                    self.request_attach(name, writer)
-                        .await
-                        .into_diagnostic()
-                        .wrap_err("Failed to attach to server")?;
-
-                    self.mode = Mode::output(self.selected_server, name.to_owned());
+                    try_attach!(self, writer);
                 }
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
                 // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
@@ -179,13 +166,7 @@ impl App {
                         *state = ServerState::Normal;
 
                         if name != selected_server {
-                            self.request_attach(selected_server, writer)
-                                .await
-                                .into_diagnostic()
-                                .wrap_err("Failed to attach to server")?;
-
-                            self.mode =
-                                Mode::output(self.selected_server, selected_server.to_owned());
+                            try_attach!(self, writer);
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
@@ -209,18 +190,11 @@ impl App {
                 }
             }
 
-            Mode::Console {
-                input,
-                state,
-                // output_text,
-                ..
-            } => match key.code {
+            Mode::Console { input, state, .. } => match key.code {
                 KeyCode::Backspace => {
                     input.pop();
-                    // output_text.invalidate();
                 }
                 KeyCode::Enter => {
-                    // output_text.invalidate();
                     input.push('\n');
 
                     write_message!(
@@ -250,7 +224,6 @@ impl App {
                     } else {
                         input.push(ch);
                     }
-                    // output_text.invalidate();
                 }
                 KeyCode::Esc => {
                     *state = ServerState::Escaping;
@@ -323,18 +296,33 @@ impl App {
                         ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
                             stderr_log!("Btw, got {}", str::from_utf8(&bytes).unwrap_or("couldn't nonvert"));
                             output.push(display_bytes(&bytes).to_string());
-                            // output_text.invalidate();
                         },
                         ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
                             history.into_iter().for_each(|line|{
                                 output.push(display_bytes(&line).to_string())
                             });
-                            // output_text.invalidate();
                         }
                     };
                 }
             }
         }
+    }
+
+    pub async fn run_attached(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        (reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+        name: String,
+    ) -> miette::Result<()> {
+        self.selected_server = self
+            .servers
+            .iter()
+            .position(|server| *server == name)
+            .wrap_err("Server not found")?;
+
+        try_attach!(self, &mut writer);
+
+        self.run(terminal, (reader, writer)).await
     }
 
     fn draw_servers_list_widget(&self) -> List<'_> {
@@ -432,6 +420,7 @@ impl App {
             .flat_map(|line| textwrap::wrap(line, output_text_width))
             .count();
 
+        // Too noisy
         // stderr_log!(
         //     "Last 10 characters: '{}'",
         //     &output_text[output_text.len().saturating_sub(11)..output_text.len()]

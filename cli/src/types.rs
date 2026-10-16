@@ -32,11 +32,23 @@ impl ServerArgument {
     }
 }
 
+impl Into<String> for ServerArgument {
+    fn into(self) -> String {
+        self.0
+    }
+}
+
 impl FromStr for ServerArgument {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.to_string()))
+    }
+}
+
+impl ToString for ServerArgument {
+    fn to_string(&self) -> String {
+        self.0.to_string()
     }
 }
 
