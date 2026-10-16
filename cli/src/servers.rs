@@ -32,6 +32,10 @@ pub async fn read(root_dir: &Path) -> miette::Result<Vec<PathBuf>> {
         {
             let entry_path = entry.path();
 
+            if !entry_path.is_dir() {
+                continue;
+            }
+
             stderr_log!("Entry path: {entry_path:?}");
 
             if fs::try_exists(entry_path.join(METADATA_DIRECTORY))
