@@ -3,7 +3,7 @@ name = "mcserver"
 version.workspace = true
 edition.workspace = true
 description = "Minecraft server cli and tui"
-repository.license = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
