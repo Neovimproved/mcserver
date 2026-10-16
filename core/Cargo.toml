@@ -3,8 +3,8 @@ name = "mcserver-core"
 version.workspace = true
 edition.workspace = true
 description = "Core modules for mcserver and mcserver-daemon"
-repository = "https://github.com/Neovimproved/mcserver"
-license = "MIT"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 bitcode = { workspace = true }

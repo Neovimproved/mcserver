@@ -1,10 +1,10 @@
 [package]
 name = "mcserver"
-version = "0.2.8"
-edition = "2024"
-description = "Minecraft server cli"
-repository = "https://github.com/Neovimproved/mcserver"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+description = "Minecraft server cli and tui"
+repository.license = true
+repository.workspace = true
 
 [dependencies]
 bitcode = { workspace = true }

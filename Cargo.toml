@@ -4,8 +4,10 @@ members = ["daemon", "cli", "core"]
 metadata.crane.name = "mcserver"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/Neovimproved/mcserver"
 
 [workspace.dependencies]
 bitcode = "0.6.9"
@@ -14,4 +16,4 @@ derive_more = { version = "2.1.1", features = ["display", "error", "from"] }
 kdl = "6.7.1"
 ratatui = "0.30.2"
 tokio = { version = "1.53.1", features = ["full"] }
-mcserver-core = { version = "0.1.0", path = "core" }
+mcserver-core = { version = "0.3.0", path = "core" }
