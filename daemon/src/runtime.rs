@@ -1,8 +1,14 @@
-use std::{env, sync::Arc};
+use std::{ffi::OsStr, path::PathBuf, sync::Arc};
 
-use color_eyre::eyre::{Context, ContextCompat, eyre};
+use color_eyre::{
+    Result,
+    eyre::{Context, eyre},
+};
 use dashmap::DashMap;
-use mcserver_core::*;
+use mcserver_core::{
+    ClientMessage, Config, LOCAL_TCP_ADDR, LineBuffer, MAX_MESSAGE_LENGTH, SOCKET_PATH,
+    ServerMessage, config, metadata, read_message, write_message,
+};
 use pty_process::{Command, Pty};
 use tokio::{
     fs,
@@ -12,22 +18,45 @@ use tokio::{
     select,
     sync::{
         broadcast,
-        mpsc::{UnboundedReceiver, unbounded_channel},
+        mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
         oneshot,
     },
 };
 
 use crate::types::{Request, ServerCommunicator};
 
+async fn spawn_server_process(
+    config: &'static Config,
+    name: &str,
+    flags: &[impl AsRef<OsStr>],
+) -> Result<(Pty, Child)> {
+    let (pty, pts) = pty_process::open()?;
+    pty.resize(pty_process::Size::new(24, 80))?;
+
+    let server_dir = PathBuf::from(config.servers_directory.to_string());
+
+    let child = Command::new("java")
+        .arg("-jar")
+        .arg(dbg!(metadata::get_jar_file(server_dir.join(name)).await?))
+        .args(flags)
+        .spawn(pts)?;
+
+    // pts (slave thing) can be dropped
+    Ok((pty, child))
+}
+
 async fn start_server(
+    config: &'static Config,
     name: &str,
     mut message_receiver: UnboundedReceiver<ClientMessage>,
     mut request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
-    let (mut pty, mut child) = spawn_server_process(name)?;
+    let (mut pty, mut child) = spawn_server_process(config, name, &config.default_java_args)
+        .await
+        .wrap_err("Failed to spawn server process")?;
 
     let mut stdout_finished = false;
 
@@ -105,14 +134,15 @@ async fn start_server(
 }
 
 async fn server_lifecycle(
+    config: &'static Config,
     name: String,
     message_receiver: UnboundedReceiver<ClientMessage>,
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<ServerMessage>,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     println!("Starting {name}");
-    let res = start_server(&name, message_receiver, request_receiver, sender).await;
+    let res = start_server(config, &name, message_receiver, request_receiver, sender).await;
 
     if let Err(err) = &res {
         eprintln!("Server: {name} btwwwwww\n{err:?}");
@@ -130,30 +160,51 @@ enum ServeAction {
     Attach(String),
 }
 
-fn spawn_server_process(_name: &str) -> color_eyre::Result<(Pty, Child)> {
-    let (pty, pts) = pty_process::open()?;
-    pty.resize(pty_process::Size::new(24, 80))?;
+async fn initialize_server(
+    config: &'static Config,
+    name: String,
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> Result<(
+    UnboundedSender<ClientMessage>,
+    UnboundedSender<Request>,
+    broadcast::Receiver<ServerMessage>,
+)> {
+    let (client_message_sender, client_message_receiver) = unbounded_channel();
 
-    let mut process_path = env::home_dir().wrap_err("Failed to get home directory")?;
+    let (client_request_sender, client_request_receiver) = unbounded_channel();
 
-    process_path.extend([
-        "Dev",
-        "example-terminal-app",
-        "target",
-        "debug",
-        "example-terminal-app",
-    ]);
+    let (server_message_sender, server_message_receiver) = broadcast::channel(4096);
 
-    let child = Command::new(process_path).spawn(pts)?;
+    server_communicators.insert(
+        name.clone(),
+        ServerCommunicator {
+            client_message_sender: client_message_sender.clone(),
+            client_request_sender: client_request_sender.clone(),
+            server_message_sender: server_message_sender.clone(),
+        },
+    );
 
-    // pts (slave thing) can be dropped
-    Ok((pty, child))
+    tokio::spawn(server_lifecycle(
+        config,
+        name,
+        client_message_receiver,
+        client_request_receiver,
+        server_message_sender.clone(),
+        server_communicators.clone(),
+    ));
+
+    Ok((
+        client_message_sender,
+        client_request_sender,
+        server_message_receiver,
+    ))
 }
 
 async fn serve_client(
     (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+    config: &'static Config,
     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-) -> color_eyre::Result<()> {
+) -> Result<()> {
     #[allow(unreachable_code)]
     let mut action = ServeAction::Prompt;
 
@@ -185,46 +236,15 @@ async fn serve_client(
             }
 
             ServeAction::Attach(name) => {
-                let (message_sender, requets_sender, mut receiver) = match server_communicators
-                    .get(&name)
-                {
-                    Some(com) => (
-                        com.client_message_sender.clone(),
-                        com.client_request_sender.clone(),
-                        com.server_message_sender.subscribe(),
-                    ),
-                    None => {
-                        let (client_message_sender, client_message_receiver) = unbounded_channel();
-
-                        let (client_request_sender, client_request_receiver) = unbounded_channel();
-
-                        let (server_message_sender, server_message_receiver) =
-                            broadcast::channel(4096);
-
-                        server_communicators.insert(
-                            name.to_owned(),
-                            ServerCommunicator {
-                                client_message_sender: client_message_sender.clone(),
-                                client_request_sender: client_request_sender.clone(),
-                                server_message_sender: server_message_sender.clone(),
-                            },
-                        );
-
-                        tokio::spawn(server_lifecycle(
-                            name.to_owned(),
-                            client_message_receiver,
-                            client_request_receiver,
-                            server_message_sender.clone(),
-                            server_communicators.clone(),
-                        ));
-
-                        (
-                            client_message_sender,
-                            client_request_sender,
-                            server_message_receiver,
-                        )
-                    }
-                };
+                let (message_sender, requets_sender, mut receiver) =
+                    match server_communicators.get(&name) {
+                        Some(com) => (
+                            com.client_message_sender.clone(),
+                            com.client_request_sender.clone(),
+                            com.server_message_sender.subscribe(),
+                        ),
+                        None => initialize_server(config, name, server_communicators).await?,
+                    };
 
                 let (tx, rx) = oneshot::channel();
 
@@ -232,7 +252,7 @@ async fn serve_client(
 
                 let history = rx.await.unwrap_or_else(|err| {
                     LineBuffer::from(vec![
-                        format!("Falied to produce history: {err:?}").into_bytes(),
+                        format!("Falied to produce history: {err:?}\n").into_bytes(),
                     ])
                 });
 
@@ -285,7 +305,11 @@ async fn serve_client(
     }
 }
 
-pub async fn main() -> color_eyre::Result<()> {
+pub async fn main() -> Result<()> {
+    let config: &'static Config = Box::leak(Box::new(
+        config::read().await.wrap_err("Failed to read config")?.0,
+    ));
+
     if let Err(err) = fs::remove_file(SOCKET_PATH).await
         && err.kind() != io::ErrorKind::NotFound
     {
@@ -308,13 +332,12 @@ pub async fn main() -> color_eyre::Result<()> {
         select! {
             res = tcp_listener.accept() => {
                 let server_communicators = server_communicators.clone();
-
                 tokio::spawn(async move {
                     let (mut stream, addr) = res?;
 
                     println!("Connected to client by tcp: {addr}");
 
-                    if let Err(err) = serve_client(stream.split(), &server_communicators).await {
+                    if let Err(err) = serve_client(stream.split(), config, &server_communicators).await {
                         eprintln!("{err:?}");
                     }
 
@@ -330,7 +353,7 @@ pub async fn main() -> color_eyre::Result<()> {
 
                     println!("Connected to client by unix socket: {addr:?}");
 
-                    if let Err(err) = serve_client(stream.split(), &server_communicators).await {
+                    if let Err(err) = serve_client(stream.split(), config, &server_communicators).await {
                         eprintln!("{err:?}");
                     }
 
