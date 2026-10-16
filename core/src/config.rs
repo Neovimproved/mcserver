@@ -1,5 +1,13 @@
-use std::{collections::HashMap, env::home_dir, fmt::Debug, path::PathBuf, str::FromStr};
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
+use dirs::home_dir;
 use kdl::KdlDocument;
 use ratatui::style::Color;
 use tokio::{fs, io};
@@ -14,22 +22,22 @@ pub struct TerminalInterfaceConfig {
     pub background_color: Option<Color>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct ServersDirectory(PathBuf);
+pub struct ServersDirectory(String);
 
 impl TryFrom<String> for ServersDirectory {
     type Error = Error;
 
     fn try_from(value: String) -> Result<Self> {
-        let value = PathBuf::from(value);
+        let expanded = shellexpand::full(&value)?.to_string();
 
-        Ok(Self(if value.is_relative() {
-            let mut home = home_dir().ok_or(Error::HomeDirectoryNotFound)?;
-            home.extend(&value);
-            home
+        Ok(Self(if Path::new(&expanded).is_relative() {
+            let mut path = home_dir().ok_or(Error::HomeDirectoryNotFound)?;
+            path.push(expanded);
+            path.into_string().map_err(Error::NonUtf8Path)?
         } else {
-            value
+            expanded
         }))
     }
 }
@@ -39,6 +47,32 @@ impl FromStr for ServersDirectory {
 
     fn from_str(s: &str) -> Result<Self> {
         Self::try_from(s.to_owned())
+    }
+}
+
+impl Deref for ServersDirectory {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ServersDirectory {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl AsRef<OsStr> for ServersDirectory {
+    fn as_ref(&self) -> &OsStr {
+        OsStr::new(&self.0)
+    }
+}
+
+impl AsRef<Path> for ServersDirectory {
+    fn as_ref(&self) -> &Path {
+        Path::new(&self.0)
     }
 }
 

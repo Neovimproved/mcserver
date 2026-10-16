@@ -1,10 +1,7 @@
 use derive_more::{Display, Error};
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
-use crate::{
-    Result,
-    config::{Config, ServersDirectory, TerminalInterfaceConfig},
-};
+use crate::{Config, Result, ServersDirectory, TerminalInterfaceConfig};
 
 #[derive(Debug, Display)]
 pub enum ParseConfigErrorKind {
@@ -13,12 +10,6 @@ pub enum ParseConfigErrorKind {
 
     #[display("Invalid type")]
     InvalidType,
-}
-
-impl ParseConfigErrorKind {
-    fn error(self, context: &'static str) -> ParseConfigError {
-        ParseConfigError::new(self, context)
-    }
 }
 
 #[derive(Debug, Display, Error)]
