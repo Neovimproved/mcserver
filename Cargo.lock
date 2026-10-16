@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "mcserver"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitcode",
  "clap",
@@ -1168,7 +1168,7 @@ dependencies = [
 
 [[package]]
 name = "mcserver-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitcode",
  "const_format",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "mcserver-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bitcode",
  "color-eyre",
