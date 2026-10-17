@@ -8,7 +8,8 @@ use tokio::{fs, io};
 
 use crate::{
     consts::{JAR_FILE_NAME, METADATA_DIRECTORY},
-    core::{Result, display_path, metadata::MetadataError::JarFileRead},
+    core::metadata::MetadataError::JarFileRead,
+    error::{Result, display_path},
 };
 
 #[derive(Debug, Display, Error)]

@@ -1,4 +1,10 @@
-use std::{future::pending, io::IsTerminal, mem, path::PathBuf};
+use std::{
+    fmt::{Debug, Display},
+    future::pending,
+    io::IsTerminal,
+    mem,
+    path::PathBuf,
+};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
@@ -7,7 +13,9 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
+    macros::span,
     style::{Color, Style, Stylize},
+    text::{Line, Span, ToSpan},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
 use tokio::{
@@ -17,8 +25,11 @@ use tokio::{
 };
 
 use crate::{
-    core::{ClientMessage, Config, LineBuffer, ServerMessage, config, display_bytes},
-    read_message, servers, write_message,
+    core::{Config, LineBuffer, ServersDirectory, config},
+    messages::{ClientMessage, ServerMessage, display_bytes},
+    read_message,
+    servers::{self, ServerEntry, ServerGroup},
+    write_message,
 };
 
 #[derive(Debug)]
@@ -59,7 +70,7 @@ pub struct App {
     config: Config,
     mode: Mode,
     document: Option<KdlDocument>,
-    servers: Vec<String>,
+    servers: Vec<ServerEntry>,
     selected_server: usize,
     exiting: bool,
 }
@@ -74,21 +85,48 @@ macro_rules! stderr_log {
     }};
 }
 
+fn readable_pretty(object: impl Debug) -> String {
+    let s = format!("{object:#?}");
+
+    let mut transformed = s
+        .split('\n')
+        .map(|line| {
+            let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+            &line[leading_spaces / 2..]
+        })
+        .fold(String::new(), |mut acc, item| {
+            acc.push_str(item);
+            acc.push('\n');
+            acc
+        });
+
+    transformed.pop();
+
+    transformed
+}
+
 macro_rules! try_attach {
     ($app:ident, $writer:expr) => {{
-        let name = $app
-            .servers
-            .get($app.selected_server)
-            .wrap_err("Invalid server index")?
-            .clone();
+        // let name = $app
+        //     .servers
+        //     .get($app.selected_server)
+        //     .wrap_err("Invalid server index")?
+        //     .clone();
 
-        $app.request_attach($writer, name.clone())
-            .await
-            .into_diagnostic()
-            .wrap_err("Failed to attach to server")?;
+        let name: String = todo!();
 
-        $app.mode = Mode::output($app.selected_server, name);
+        // $app.request_attach($writer, name)
+        //     .await
+        //     .into_diagnostic()
+        //     .wrap_err("Failed to attach to server")?;
+
+        $app.mode = Mode::output($app.selected_server, todo!());
     }};
+}
+
+enum NestEntry<'a> {
+    GroupEnd,
+    Group(&'a mut ServerGroup),
 }
 
 impl App {
@@ -98,16 +136,9 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to create/read config")?;
 
-        stderr_log!("{config:?}");
+        stderr_log!("Pretty config: {config:#?}");
 
-        let servers = servers::read(config.servers_directory.as_ref())
-            .await?
-            .into_iter()
-            .map(PathBuf::into_string)
-            .collect::<Result<Vec<String>, PathBuf>>()
-            // TODO: put question mark symbols where there is non utf-8 data
-            .map_err(crate::core::Error::NonUtf8Path)
-            .into_diagnostic()?;
+        let servers = servers::read(config.servers_directory.as_ref()).await?;
 
         Ok(Self {
             config,
@@ -119,13 +150,55 @@ impl App {
         })
     }
 
-    pub async fn request_attach(
-        &self,
+    // returns the fully qualified server name if found
+    pub async fn try_select(
+        &mut self,
         mut writer: impl AsyncWriteExt + Unpin,
-        server_name: impl Into<String>,
-    ) -> io::Result<()> {
-        let name = server_name.into();
-        write_message!(writer, ClientMessage::Attach { name: name.clone() }).await
+    ) -> io::Result<Option<String>> {
+        let mut counter = 0;
+        let mut name: Option<String> = None;
+
+        let mut iterators = vec![self.servers.iter_mut()];
+        let mut qualifier: Vec<&str> = vec![];
+
+        while let Some(back_iter) = iterators.last_mut() {
+            for mut entry in back_iter {
+                if self.selected_server == counter {
+                    match entry {
+                        ServerEntry::Group(server_group) => {
+                            server_group.expanded = !server_group.expanded;
+                            return Ok(None);
+                        }
+                        ServerEntry::Object(server_object) => {
+                            qualifier.push(&server_object.name);
+                            return Ok(Some(qualifier.join("/")));
+                        }
+                    }
+                }
+
+                counter += 1;
+
+                if let ServerEntry::Group(server_group) = entry
+                    && server_group.expanded
+                {
+                    qualifier.push(&server_group.name);
+                    iterators.push(server_group.children.iter_mut());
+                    break;
+                }
+            }
+
+            iterators.pop();
+        }
+
+        let Some(name) = name else {
+            stderr_log!("{counter}");
+            return Ok(None);
+        };
+
+        // let name = server_name.into();
+        write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
+
+        Ok(Some(name))
     }
 
     pub async fn handle_keycode(
@@ -136,7 +209,13 @@ impl App {
         match &mut self.mode {
             Mode::Selecting => match key.code {
                 KeyCode::Enter => {
-                    try_attach!(self, writer);
+                    let res = self
+                        .try_select(writer)
+                        .await
+                        .into_diagnostic()
+                        .wrap_err("Failed to select item")?;
+
+                    stderr_log!("{res:?}");
                 }
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
                 // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
@@ -151,7 +230,13 @@ impl App {
                 KeyCode::Char(ch) => match ch {
                     'q' => self.exit(),
                     'd' => todo!("Implement deletion"),
-                    'u' => todo!("Implement manual server list updation"),
+                    's' => todo!("Implement manual server list synchronization"),
+
+                    'u' => {
+                        stderr_log!("{}", readable_pretty(&self.servers));
+                        stderr_log!("Position: {}", self.selected_server);
+                    }
+
                     _ => {}
                 },
                 _ => {}
@@ -172,15 +257,16 @@ impl App {
                 match key.code {
                     KeyCode::Backspace => todo!(),
                     KeyCode::Enter => {
-                        let Some(selected_server) = self.servers.get(self.selected_server) else {
-                            // TODO: ig this is an error
-                            return Ok(());
-                        };
-
-                        *state = ServerState::Normal;
-
-                        if name != selected_server {
-                            try_attach!(self, writer);
+                        stderr_log!("Trying to select rn");
+                        if let Some(name) = self
+                            .try_select(writer)
+                            .await
+                            .into_diagnostic()
+                            .wrap_err("Failed to attach to server")?
+                        {
+                            self.mode = Mode::output(self.selected_server, name);
+                        } else {
+                            stderr_log!("None found!");
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
@@ -356,54 +442,113 @@ impl App {
         (reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
         name: String,
     ) -> miette::Result<()> {
-        self.selected_server = self
-            .servers
-            .iter()
-            .position(|server| *server == name)
-            .wrap_err("Server not found")?;
+        // self.selected_server = self
+        //     .servers
+        //     .iter()
+        //     .position(|server| *server == name)
+        //     .wrap_err("Server not found")?;
 
-        try_attach!(self, &mut writer);
+        self.selected_server = todo!();
+
+        // TODO: attach here
+        // try_attach!(self, &mut writer);
 
         self.run(terminal, (reader, writer)).await
     }
 
-    fn draw_servers_list_widget(&self) -> List<'_> {
-        let servers_iter = self.servers.iter().enumerate();
+    fn iterate_entries<'a>(
+        &self,
+        entries: &'a [ServerEntry],
+        depth: usize,
+        counter: &mut usize,
+        attached: usize,
+    ) -> Vec<Line<'a>> {
+        let mut lines = vec![];
+        let indentation = " ".repeat(depth * 2);
+        let incremented_depth = depth + 1;
 
-        if let Mode::Console {
-            attached_server, ..
-        } = self.mode
-        {
-            List::new(servers_iter.map(|(idx, name)| {
-                let item = if idx == self.selected_server {
-                    ListItem::from(format!("> {name}")).bold()
-                } else {
-                    ListItem::from(format!("  {name}"))
-                };
+        for entry in entries.iter() {
+            match entry {
+                ServerEntry::Group(server_group) => {
+                    let line = match (*counter == self.selected_server, server_group.expanded) {
+                        (true, true) => {
+                            Line::from(format!("{indentation}v {}/", server_group.name)).bold()
+                        }
+                        (true, false) => {
+                            Line::from(format!("{indentation}> {}/", server_group.name)).bold()
+                        }
+                        (false, _) => Line::from(format!("{indentation}  {}/", server_group.name)),
+                    };
 
-                if idx == attached_server {
-                    item.fg(Color::Black).bg(Color::White)
-                } else {
-                    item
+                    lines.push(line);
+
+                    *counter += 1;
+
+                    if server_group.expanded {
+                        lines.extend(self.iterate_entries(
+                            &server_group.children,
+                            incremented_depth,
+                            counter,
+                            attached,
+                        ));
+                    }
                 }
-            }))
-        } else {
-            List::new(servers_iter.map(|(idx, name)| {
-                if idx == self.selected_server {
-                    ListItem::from(format!("> {name}")).bold()
-                } else {
-                    ListItem::from(format!("  {name}"))
+                ServerEntry::Object(server_object) => {
+                    let line = match (*counter == self.selected_server, *counter == attached) {
+                        (true, true) => Line::from(vec![
+                            span!(indentation),
+                            '>'.to_span(),
+                            '●'.green(),
+                            server_object.name.to_span(),
+                        ])
+                        .fg(Color::White)
+                        .bg(Color::Black)
+                        .bold(),
+                        (true, false) => {
+                            Line::from(format!("{indentation}> {}", server_object.name)).bold()
+                        }
+                        (false, true) => {
+                            Line::from(vec![span!(indentation), ' '.to_span(), '●'.green()])
+                                .fg(Color::White)
+                                .bg(Color::Black)
+                        }
+                        (false, false) => {
+                            Line::from(format!("{indentation}  {}", server_object.name))
+                        }
+                    };
+
+                    lines.push(line);
+
+                    *counter += 1;
                 }
-            }))
+            }
         }
-        // List::new(self.servers.iter().enumerate().map(|(idx, name)| {
-        //     ListItem::new(if idx == self.selected_server {
-        //         Text::styled(format!("> {name}"), Style::new().bold())
-        //     } else {
-        //         Text::raw(format!("  {name}"))
-        //     })
-        // }))
-        .block(Block::new().title("Servers").borders(Borders::ALL))
+
+        lines
+    }
+
+    fn draw_servers_list_widget(&self, height_available: u16) -> List<'_> {
+        let mut counter = 0;
+
+        let lines = self.iterate_entries(
+            &self.servers,
+            0,
+            &mut counter,
+            match self.mode {
+                Mode::Console {
+                    attached_server, ..
+                } => attached_server,
+                _ => usize::MAX,
+            },
+        );
+
+        // stderr_log!("Servers: {:?}", self.servers);
+        // stderr_log!("Lines: {lines:?}");
+
+        let length = lines.len();
+
+        // TODO: use this
+        List::new(lines).block(Block::new().title("Servers").borders(Borders::ALL))
     }
 
     fn render(&self, frame: &mut Frame) {
@@ -429,7 +574,8 @@ impl App {
             ..
         } = &self.mode
         else {
-            frame.render_widget(self.draw_servers_list_widget(), frame.area());
+            let area = frame.area();
+            frame.render_widget(self.draw_servers_list_widget(area.height), area);
             return;
         };
 
@@ -437,7 +583,12 @@ impl App {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                 .split(frame.area());
 
-            frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
+            stderr_log!("Hello");
+
+            frame.render_widget(
+                self.draw_servers_list_widget(main_sections[0].height),
+                main_sections[0],
+            );
 
             main_sections[1]
         } else {
@@ -490,11 +641,41 @@ impl App {
     }
 
     fn selection_up(&mut self) {
+        let old = self.selected_server;
         self.selected_server = self.selected_server.saturating_sub(1);
+
+        if old != self.selected_server {
+            stderr_log!("New: {}", self.selected_server);
+        }
+    }
+
+    fn count_len(entries: &[ServerEntry]) -> usize {
+        let mut len = 0;
+
+        for entry in entries {
+            match entry {
+                ServerEntry::Group(server_group) => {
+                    if server_group.expanded {
+                        len += Self::count_len(&server_group.children) + 1;
+                    } else {
+                        len += 1;
+                    }
+                }
+                ServerEntry::Object(server_object) => len += 1,
+            }
+        }
+
+        len
     }
 
     fn selection_down(&mut self) {
-        self.selected_server = usize::min(self.selected_server + 1, self.servers.len() - 1);
+        let old = self.selected_server;
+        let mut length = Self::count_len(&self.servers);
+        self.selected_server = usize::min(self.selected_server + 1, length - 1);
+
+        if old != self.selected_server {
+            stderr_log!("New: {}", self.selected_server);
+        }
     }
 
     pub fn exit(&mut self) {

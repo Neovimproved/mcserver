@@ -1,6 +1,9 @@
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 
-use crate::core::{ClientMessage, LineBuffer, ServerMessage};
+use crate::{
+    core::LineBuffer,
+    messages::{ClientMessage, ServerMessage},
+};
 
 pub struct ServerCommunicator {
     pub client_message_sender: UnboundedSender<ClientMessage>,

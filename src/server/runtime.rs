@@ -21,7 +21,8 @@ use tokio::{
 
 use crate::{
     consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
-    core::{ClientMessage, Config, LineBuffer, ServerMessage, config, metadata},
+    core::{Config, LineBuffer, config, metadata},
+    messages::{ClientMessage, ServerMessage},
     read_message,
     server::types::{Request, ServerCommunicator},
     write_message,

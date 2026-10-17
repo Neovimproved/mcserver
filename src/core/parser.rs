@@ -7,7 +7,8 @@ use ratatui::style::{Color, ParseColorError};
 
 use crate::{
     consts::{DEFAULT_BLINK_INTERVAL, DEFAULT_SERVERS_DIRECTORY},
-    core::{Config, Result, ServersDirectory, TerminalInterfaceConfig},
+    core::{Config, ServersDirectory, TerminalInterfaceConfig},
+    error::Result,
 };
 
 const TUI_BACKGROUND_COLOR_FIELD: &str = "background_color";

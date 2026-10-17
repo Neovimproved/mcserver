@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::fs::{self, File};
 
 use clap::Parser;
@@ -16,6 +17,8 @@ mod args;
 mod client;
 mod consts;
 mod core;
+mod error;
+mod messages;
 mod server;
 mod servers;
 
