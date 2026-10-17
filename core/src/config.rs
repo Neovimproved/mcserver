@@ -5,6 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     str::FromStr,
+    time::Duration,
 };
 
 use dirs::home_dir;
@@ -13,8 +14,8 @@ use ratatui::style::Color;
 use tokio::{fs, io};
 
 use crate::{
-    CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, DEFAULT_SERVERS_DIRECTORY, Error, Result,
-    parser::parse_config,
+    CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, DEFAULT_BLINK_INTERVAL, DEFAULT_SERVERS_DIRECTORY,
+    Error, Result, parser::parse_config,
 };
 
 #[derive(Debug, Default)]
@@ -82,6 +83,7 @@ pub struct Config {
     pub servers_directory: ServersDirectory,
     pub aliases: HashMap<String, String>,
     pub auto_restart: Option<usize>,
+    pub blink_interval: Option<Duration>,
     pub terminal_interface_config: TerminalInterfaceConfig,
 }
 
@@ -92,6 +94,7 @@ impl Config {
             servers_directory: ServersDirectory::from_str(DEFAULT_SERVERS_DIRECTORY)?,
             aliases: Default::default(),
             auto_restart: Default::default(),
+            blink_interval: DEFAULT_BLINK_INTERVAL,
             terminal_interface_config: Default::default(),
         })
     }
