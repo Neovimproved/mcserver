@@ -1,20 +1,27 @@
-[workspace]
-resolver = "3"
-members = ["daemon", "cli", "core"]
-metadata.crane.name = "mcserver"
-
-[workspace.package]
+[package]
+name = "mcserver"
+# metadata.crane.name = "mcserver"
 version = "0.3.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/Neovimproved/mcserver"
 
-[workspace.dependencies]
+[dependencies]
 bitcode = "0.6.9"
+clap = { version = "4.6.7", features = ["derive"] }
+color-eyre = "0.6.5"
 const_format = "0.2.36"
+crossterm = { version = "0.29.0", features = ["event-stream"] }
+daemonize2 = "0.7.0"
+dashmap = "6.2.1"
 derive_more = { version = "2.1.1", features = ["display", "error", "from"] }
+dirs = "7.0.0"
+futures = "0.3.34"
 inotify = { version = "0.11.5", features = ["tokio"] }
 kdl = "6.7.1"
+miette = { version = "7.6.0", features = ["fancy"] }
+pty-process = { version = "0.5.3", features = ["async"] }
 ratatui = "0.30.2"
+shellexpand = "3.1.2"
+textwrap = "0.16.4"
 tokio = { version = "1.53.1", features = ["full"] }
-mcserver-core = { version = "0.3.1", path = "core" }
