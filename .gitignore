@@ -1,4 +1,4 @@
 /target
 result
+.envrc
 .direnv/
-*.zsh
