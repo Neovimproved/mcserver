@@ -15,10 +15,13 @@ use crate::{
 
 mod args;
 mod client;
+mod config;
 mod consts;
-mod core;
 mod error;
+mod line_buffer;
 mod messages;
+mod metadata;
+mod parser;
 mod server;
 mod servers;
 

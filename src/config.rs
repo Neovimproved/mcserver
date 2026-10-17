@@ -17,8 +17,8 @@ use crate::{
     consts::{
         CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, DEFAULT_BLINK_INTERVAL, DEFAULT_SERVERS_DIRECTORY,
     },
-    core::parser::parse_config,
     error::{Error, Result},
+    parser::parse_config,
 };
 
 #[derive(Debug, Default)]

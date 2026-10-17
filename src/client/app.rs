@@ -25,7 +25,8 @@ use tokio::{
 };
 
 use crate::{
-    core::{Config, LineBuffer, ServersDirectory, config},
+    config::{self, Config},
+    line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
     servers::{self, ServerEntry, ServerGroup},

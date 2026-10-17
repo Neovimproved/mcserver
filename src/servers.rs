@@ -4,7 +4,11 @@ use tokio::fs;
 
 use miette::{Context, IntoDiagnostic, miette};
 
-// use crate::core::{Error, display_path};
+#[cfg(not(feature = "servers-only"))]
+use crate::{Error, display_path};
+
+#[cfg(feature = "servers-only")]
+use crate::Error;
 
 const METADATA_DIRECTORY: &str = ".mcserver";
 

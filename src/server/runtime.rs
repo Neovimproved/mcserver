@@ -20,10 +20,11 @@ use tokio::{
 };
 
 use crate::{
+    config::{self, Config},
     consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
-    core::{Config, LineBuffer, config, metadata},
+    line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage},
-    read_message,
+    metadata, read_message,
     server::types::{Request, ServerCommunicator},
     write_message,
 };
@@ -219,7 +220,7 @@ async fn serve_client(
                 let name = &loop {
                     let message: ClientMessage = match read_message!(reader).await {
                         Ok(message) => message,
-                        Err(crate::core::Error::Io(err))
+                        Err(crate::error::Error::Io(err))
                             if err.kind() == io::ErrorKind::UnexpectedEof =>
                         {
                             println!("Most graceful client disconnect");

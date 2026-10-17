@@ -8,7 +8,6 @@ use tokio::{fs, io};
 
 use crate::{
     consts::{JAR_FILE_NAME, METADATA_DIRECTORY},
-    core::metadata::MetadataError::JarFileRead,
     error::{Result, display_path},
 };
 
@@ -49,7 +48,7 @@ pub async fn get_jar_file(mut server_dir: PathBuf) -> Result<PathBuf> {
 
     let mut contents = fs::read_to_string(&file_path)
         .await
-        .map_err(|err| JarFileRead(file_path, err))?;
+        .map_err(|err| MetadataError::JarFileRead(file_path, err))?;
 
     // If a user has written to the file, it is possible that they inadvertently added newlines
     while let Some(ch) = contents.chars().next_back()

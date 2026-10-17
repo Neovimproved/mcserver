@@ -1,7 +1,7 @@
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
 
 use crate::{
-    core::LineBuffer,
+    line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage},
 };
 

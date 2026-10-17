@@ -6,8 +6,8 @@ use kdl::{KdlDocument, KdlNode, KdlValue};
 use ratatui::style::{Color, ParseColorError};
 
 use crate::{
+    config::{Config, ServersDirectory, TerminalInterfaceConfig},
     consts::{DEFAULT_BLINK_INTERVAL, DEFAULT_SERVERS_DIRECTORY},
-    core::{Config, ServersDirectory, TerminalInterfaceConfig},
     error::Result,
 };
 

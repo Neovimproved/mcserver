@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use bitcode::{Decode, Encode};
 use derive_more::Display;
 
-use crate::core::LineBuffer;
+use crate::line_buffer::LineBuffer;
 
 fn terminal_like_bytes(bytes: &str, normal_end: usize) -> String {
     let mut acc = String::from(&bytes[..normal_end]);
@@ -116,7 +116,7 @@ macro_rules! read_message {
             let mut buf = vec![0u8; $length as usize];
             $reader.read_exact(&mut buf).await?;
 
-            $crate::core::Result::<_>::Ok(bitcode::decode(&buf)?)
+            $crate::error::Result::<_>::Ok(bitcode::decode(&buf)?)
         }
     };
 }
