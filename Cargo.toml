@@ -13,7 +13,7 @@ repository = "https://github.com/Neovimproved/mcserver"
 bitcode = "0.6.9"
 const_format = "0.2.36"
 derive_more = { version = "2.1.1", features = ["display", "error", "from"] }
-inotify = "0.11.5"
+inotify = { version = "0.11.5", features = ["tokio"] }
 kdl = "6.7.1"
 ratatui = "0.30.2"
 tokio = { version = "1.53.1", features = ["full"] }

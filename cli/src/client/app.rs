@@ -1,7 +1,7 @@
-use std::{io::IsTerminal, mem, path::PathBuf};
+use std::{future::pending, io::IsTerminal, mem, path::PathBuf};
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
-use futures::StreamExt;
+use futures::{StreamExt, future::Either};
 use kdl::KdlDocument;
 use mcserver_core::{
     ClientMessage, Config, LineBuffer, ServerMessage, config, display_bytes, read_message,
@@ -14,7 +14,11 @@ use ratatui::{
     style::{Color, Style, Stylize},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::{
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    pin,
+    time::sleep,
+};
 
 use crate::servers;
 
@@ -34,6 +38,7 @@ enum Mode {
         input: String,
         output: LineBuffer,
         state: ServerState,
+        blink: bool,
     },
 }
 
@@ -45,10 +50,12 @@ impl Mode {
             input: String::new(),
             output: LineBuffer::new(),
             state: ServerState::Normal,
+            blink: false,
         }
     }
 }
 
+#[allow(dead_code)]
 pub struct App {
     config: Config,
     mode: Mode,
@@ -215,7 +222,10 @@ impl App {
                 }
                 KeyCode::Left => todo!("Implement cursor left"),
                 KeyCode::Right => todo!("Implement cursor right"),
-                KeyCode::Tab => todo!("Implement autocompletions"),
+                KeyCode::Tab => write_message!(writer, ClientMessage::ProgramInput(vec![b'\t']))
+                    .await
+                    .into_diagnostic()
+                    .wrap_err("Failed to send tab to server")?,
                 KeyCode::BackTab => {
                     *state = ServerState::Escaping;
                 }
@@ -250,6 +260,14 @@ impl App {
     ) -> miette::Result<()> {
         let mut event_reader = EventStream::new();
 
+        let blink_event = if let Some(blink_interval) = self.config.blink_interval {
+            Either::Left(sleep(blink_interval))
+        } else {
+            Either::Right(pending())
+        };
+
+        pin!(blink_event);
+
         loop {
             if self.exiting {
                 writer
@@ -266,51 +284,69 @@ impl App {
                 .wrap_err("Failed to render tui")?;
 
             tokio::select! {
-                event = &mut event_reader.next() => {
-                    let Some(event) = event else {
-                        bail!("Failed to read from terminal");
-                    };
+                    event = &mut event_reader.next() => {
+                        let Some(event) = event else {
+                            bail!("Failed to read from terminal");
+                        };
 
-                    let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
-                        // only care about those keys!!
-                        continue;
-                    };
+                        let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
+                            // only care about those keys!!
+                            continue;
+                        };
 
-                    self.handle_keycode(key, &mut writer).await?;
-                }
+                        self.handle_keycode(key, &mut writer).await?;
+                    }
 
-                length = reader.read_u32() => {
-                    let length = match length {
-                        Ok(length) => length,
-                        Err(err) => match err.kind() {
-                            io::ErrorKind::UnexpectedEof => {
-                                stderr_log!("Server closed");
-                                return Err(err).into_diagnostic().wrap_err("Server connection severed");
-                            },
-                            _ => return Err(err).into_diagnostic(),
-                        },
-                    };
+                    _ = &mut blink_event => {
+                        blink_event.set(if let Some(blink_interval) = self.config.blink_interval {
+                            Either::Left(sleep(blink_interval))
+                        } else {
+                            Either::Right(pending())
+                        });
 
-                    match read_message!(reader, length).await.into_diagnostic().wrap_err("Failed to receive message from server")? {
-                        ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
-                        ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
-                        ServerMessage::Closed => if let Mode::Console { input, state, .. } = &mut self.mode {
-                            *input = "Press enter to return...".to_string();
-                            *state = ServerState::Dead;
-                        },
-                        ServerMessage::Message(message) => stderr_log!("Received a message from the server: {message}"),
-                        ServerMessage::AlreadyStarted => stderr_log!("The server has already started apparently"),
-                        ServerMessage::NotAttached => stderr_log!("The server has not yet started apparently"),
-                        ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
-                            output.push(display_bytes(&bytes).to_string());
-                        },
-                        ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
-                            history.into_iter().for_each(|line|{
-                                output.push(display_bytes(&line).to_string())
-                            });
+                        if let Mode::Console { blink, .. } = &mut self.mode {
+                            *blink = !*blink;
                         }
-                    };
-                }
+                    }
+
+                    length = reader.read_u32() => {
+                        let length = match length {
+                            Ok(length) => length,
+                            Err(err) => match err.kind() {
+                                io::ErrorKind::UnexpectedEof => {
+                                    stderr_log!("Server closed");
+                                    return Err(err).into_diagnostic().wrap_err("Server connection severed");
+                                },
+                                _ => return Err(err).into_diagnostic(),
+                            },
+                        };
+
+                        match read_message!(reader, length).await.into_diagnostic().wrap_err("Failed to receive message from server")? {
+                            ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
+                            ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
+                            ServerMessage::Closed => if let Mode::Console { input, state, .. } = &mut self.mode {
+                                *input = "Press enter to return...".to_string();
+                                *state = ServerState::Dead;
+                            },
+                            ServerMessage::Message(message) => {
+                                stderr_log!("Received a message from the server: {message}");
+                            },
+                            ServerMessage::AlreadyStarted => {
+                                stderr_log!("The server has already started apparently");
+                            },
+                            ServerMessage::NotAttached => {
+                                stderr_log!("The server has not yet started apparently");
+                            },
+                            ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
+                                output.push(display_bytes(&bytes).to_string());
+                            },
+                            ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
+                                history.into_iter().for_each(|line|{
+                                    output.push(display_bytes(&line).to_string())
+                                });
+                            }
+                        }
+                    }
             }
         }
     }
@@ -380,14 +416,17 @@ impl App {
         // Very light, neutral, middle ground, valid color
         // 46, 52, 64
 
-        let background_block = Block::new().style(Style::new().bg(Color::Rgb(46, 52, 64)));
+        if let Some(background_color) = self.config.terminal_interface_config.background_color {
+            let background_block = Block::new().style(Style::new().bg(background_color));
 
-        frame.render_widget(background_block, frame.area());
+            frame.render_widget(background_block, frame.area());
+        }
 
         let Mode::Console {
             input,
             output,
             state,
+            blink,
             ..
         } = &self.mode
         else {
@@ -409,11 +448,19 @@ impl App {
         let output_text_width = output_area.width.saturating_sub(2) as usize;
         let output_lines_available = output_area.height.saturating_sub(2) as usize;
 
+        // mono
+        // negro
+        // ------------
+        // yes
+        // sir
+        // man
+        // yesman
+
         let mut output_text = output
             .iter()
             // use skip here to get the maximum number of lines that might need to be used
             // Then, the lines that aren't used will simply not be rendered
-            .skip((output.len()).saturating_sub(output_lines_available.saturating_sub(1)))
+            .skip(output.len().saturating_sub(output_lines_available))
             .fold(String::new(), |mut acc, item| {
                 acc.push_str(item);
                 // acc.push('\n');
@@ -422,16 +469,14 @@ impl App {
 
         output_text.push_str(input);
 
+        if *blink {
+            output_text.push('█');
+        }
+
         let lines = output_text
             .split('\n')
             .flat_map(|line| textwrap::wrap(line, output_text_width))
             .count();
-
-        // Too noisy
-        // stderr_log!(
-        //     "Last 10 characters: '{}'",
-        //     &output_text[output_text.len().saturating_sub(11)..output_text.len()]
-        // );
 
         let output_widget = Paragraph::new(output_text)
             .block(Block::new().title("Console").borders(Borders::ALL))

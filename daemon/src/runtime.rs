@@ -7,7 +7,7 @@ use color_eyre::{
 use dashmap::DashMap;
 use mcserver_core::{
     ClientMessage, Config, LOCAL_TCP_ADDR, LineBuffer, MAX_MESSAGE_LENGTH, SOCKET_PATH,
-    ServerMessage, config, display_path, metadata, read_message, write_message,
+    ServerMessage, config, metadata, read_message, write_message,
 };
 use pty_process::{Command, Pty};
 use tokio::{

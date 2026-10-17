@@ -1,56 +1,78 @@
-use std::net::IpAddr;
-
-use clap::Parser;
-use miette::Context;
-
-use crate::{
-    app::App,
-    args::{Args, Command},
-    terminal::{GuardedTerminal, try_connect_tcp, try_connect_unix_socket},
+use std::{
+    fs::{self, File},
+    os::unix::net::UnixStream,
 };
 
-mod app;
+use clap::Parser;
+use color_eyre::eyre::Context as EyreContext;
+use const_format::formatcp;
+use daemonize2::Daemonize;
+use mcserver_core::{PID_FILE_PATH, TEMP_DIR};
+use tokio::runtime::Runtime;
+
+use crate::{
+    args::{Args, Command},
+    server::runtime,
+};
+
 mod args;
+mod client;
+mod server;
 mod servers;
-mod terminal;
-mod types;
 
-pub async fn start(ip_addr: Option<IpAddr>, server_arg: Option<String>) -> miette::Result<()> {
-    let mut app = App::try_new()
-        .await
-        .wrap_err("Failed to create application object")?;
-    let mut terminal = GuardedTerminal::new();
+fn server(daemonize: bool) -> color_eyre::Result<()> {
+    color_eyre::install()?;
 
-    if let Some(ip_addr) = ip_addr {
-        let mut stream = try_connect_tcp(ip_addr).await?;
+    fs::create_dir_all(TEMP_DIR).wrap_err("Failed to create daemon directory")?;
 
-        if let Some(server_arg) = server_arg {
-            app.run_attached(&mut terminal, stream.split(), server_arg)
-                .await
-        } else {
-            app.run(&mut terminal, stream.split()).await
-        }
-    } else {
-        let mut stream = try_connect_unix_socket().await?;
-
-        if let Some(server_arg) = server_arg {
-            app.run_attached(&mut terminal, stream.split(), server_arg)
-                .await
-        } else {
-            app.run(&mut terminal, stream.split()).await
-        }
+    if !daemonize {
+        // no daemonize
+        Runtime::new()?.block_on(runtime::main())?;
+        return Ok(());
     }
+
+    let stdout = File::create(formatcp!("{TEMP_DIR}/daemon.out"))
+        .wrap_err("Failed to create stdout file")?;
+
+    let stderr = File::create(formatcp!("{TEMP_DIR}/daemon.err"))
+        .wrap_err("Failed to create stderr file")?;
+
+    let daemonize = Daemonize::new()
+        .pid_file(PID_FILE_PATH) // Every method except `new` and `start`
+        .working_directory(TEMP_DIR) // for default behaviour.
+        .stdout(stdout)
+        .stderr(stderr)
+        .privileged_action(|| "Executed before drop privileges");
+
+    unsafe { daemonize.start() }.wrap_err("Failed to daemonize process")?;
+
+    println!("Successfully daemonized!");
+
+    Runtime::new()
+        .wrap_err("Failed to")?
+        .block_on(server::runtime::main())?;
+
+    println!("Finished!");
+
+    Ok(())
 }
 
-#[tokio::main]
-async fn main() -> miette::Result<()> {
+fn main() -> miette::Result<()> {
     let args = Args::parse();
 
+    if args.server {
+        return server(true).map_err(miette::Report::msg);
+    }
+
+    if args.server_no_daemonize {
+        return server(false).map_err(miette::Report::msg);
+    }
+
     let Some(command) = args.command else {
-        return start(args.tcp, None).await;
+        return client::start(args.tcp, None);
     };
 
     match command {
-        Command::Attach { server } => start(args.tcp, Some(server.into())).await,
+        Command::Attach { server } => client::start(args.tcp, Some(server.into())),
     }
 }

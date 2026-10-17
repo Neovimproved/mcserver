@@ -18,42 +18,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 
-const DAEMON_EXECUTABLE_NAME: &str = "mcserver-daemon";
-
-async fn find_possible_path() -> miette::Result<PathBuf> {
-    let daemon_path = fs::canonicalize(
-        current_exe()
-            .into_diagnostic()
-            .wrap_err("Failed to get path of current executable")?,
-    )
-    .await
-    .into_diagnostic()
-    .wrap_err("Failed to canonicalize executable path")?
-    .parent()
-    .wrap_err("Failed to get parent of executable path")?
-    .join(DAEMON_EXECUTABLE_NAME);
-
-    if fs::try_exists(&daemon_path)
-        .await
-        .into_diagnostic()
-        .wrap_err("Failed to check if daemon exists")?
-    {
-        return Ok(daemon_path);
-    }
-
-    if !fs::try_exists(&daemon_path)
-        .await
-        .into_diagnostic()
-        .wrap_err("Failed to check if daemon executable exists")?
-    {
-        bail!(
-            "Failed to find a path for the daemon. Have you installed it? (try cargo install mcserver-daemon)"
-        );
-    }
-
-    Ok(daemon_path)
-}
-
 async fn spin_up_server_instance() -> miette::Result<()> {
     let mut cmd = Command::new(
         find_possible_path()
