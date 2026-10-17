@@ -7,7 +7,6 @@ use std::{
 
 use futures::StreamExt;
 use inotify::{Inotify, WatchMask};
-use mcserver_core::{SOCKET_FILE_NAME, SOCKET_PATH, TCP_PORT, TEMP_DIR};
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::DefaultTerminal;
 use tokio::{
@@ -26,6 +25,8 @@ mod types;
 use app::App;
 
 pub use types::ServerArgument;
+
+use crate::consts::{SOCKET_FILE_NAME, SOCKET_PATH, TCP_PORT, TEMP_DIR};
 
 pub struct GuardedTerminal {
     terminal: DefaultTerminal,

@@ -3,12 +3,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use mcserver_core::{METADATA_DIRECTORY, display_path};
 use tokio::fs;
 
 use miette::{Context, IntoDiagnostic};
 
-use crate::stderr_log;
+use crate::{consts::METADATA_DIRECTORY, core::display_path, stderr_log};
 
 pub async fn read(root_dir: &Path) -> miette::Result<Vec<PathBuf>> {
     let mut servers = vec![];

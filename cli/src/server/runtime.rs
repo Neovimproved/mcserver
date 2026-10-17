@@ -5,10 +5,6 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use dashmap::DashMap;
-use mcserver_core::{
-    ClientMessage, Config, LOCAL_TCP_ADDR, LineBuffer, MAX_MESSAGE_LENGTH, SOCKET_PATH,
-    ServerMessage, config, metadata, read_message, write_message,
-};
 use pty_process::{Command, Pty};
 use tokio::{
     fs,
@@ -23,7 +19,13 @@ use tokio::{
     },
 };
 
-use crate::server::types::{Request, ServerCommunicator};
+use crate::{
+    consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
+    core::{ClientMessage, Config, LineBuffer, ServerMessage, config, metadata},
+    read_message,
+    server::types::{Request, ServerCommunicator},
+    write_message,
+};
 
 async fn spawn_server_process(
     config: &'static Config,
@@ -216,7 +218,7 @@ async fn serve_client(
                 let name = &loop {
                     let message: ClientMessage = match read_message!(reader).await {
                         Ok(message) => message,
-                        Err(mcserver_core::Error::Io(err))
+                        Err(crate::core::Error::Io(err))
                             if err.kind() == io::ErrorKind::UnexpectedEof =>
                         {
                             println!("Most graceful client disconnect");

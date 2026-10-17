@@ -15,12 +15,13 @@ crossterm = { version = "0.29.0", features = ["event-stream"] }
 daemonize2 = "0.7.0"
 dashmap = "6.2.1"
 derive_more = { workspace = true }
+dirs = "7.0.0"
 futures = "0.3.34"
 inotify = { workspace = true }
 kdl = { workspace = true }
-mcserver-core = { workspace = true }
 miette = { version = "7.6.0", features = ["fancy"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 ratatui = { workspace = true }
+shellexpand = "3.1.2"
 textwrap = "0.16.4"
 tokio = { workspace = true }

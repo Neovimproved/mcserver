@@ -1,5 +1,6 @@
-use mcserver_core::{ClientMessage, LineBuffer, ServerMessage};
 use tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot};
+
+use crate::core::{ClientMessage, LineBuffer, ServerMessage};
 
 pub struct ServerCommunicator {
     pub client_message_sender: UnboundedSender<ClientMessage>,

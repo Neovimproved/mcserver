@@ -42,40 +42,11 @@
           };
 
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-          crateArgs = commonArgs // {
-            inherit cargoArtifacts;
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-          };
-
-          fileSetForCrate =
-            crate:
-            lib.fileset.toSource {
-              root = ./.;
-              fileset = lib.fileset.unions [
-                ./Cargo.toml
-                ./Cargo.lock
-                (craneLib.fileset.commonCargoSources ./core)
-                (craneLib.fileset.commonCargoSources ./daemon)
-                (craneLib.fileset.commonCargoSources crate)
-              ];
-            };
         in
-        rec {
-
-          cli = craneLib.buildPackage crateArgs // {
-            pname = "mcserver";
-            # cargoExtraArgs = "-p mcserver";
-            src = fileSetForCrate ./cli;
+        {
+          default = craneLib.buildPackage commonArgs // {
+            inherit cargoArtifacts;
           };
-
-          daemon = craneLib.buildPackage crateArgs // {
-            pname = "mcserver-daemon";
-            # cargoExtraArgs = "-p mcserver-daemon";
-            src = fileSetForCrate ./daemon;
-          };
-
-          default = cli;
         }
       );
 
@@ -87,8 +58,7 @@
         {
           default = pkgs.mkShell {
             inputsFrom = [
-              self.packages.${system}.cli
-              self.packages.${system}.daemon
+              self.packages.${system}.default
             ];
 
             nativeBuildInputs = with pkgs; [

@@ -1,22 +1,21 @@
-use std::{
-    fs::{self, File},
-    os::unix::net::UnixStream,
-};
+use std::fs::{self, File};
 
 use clap::Parser;
 use color_eyre::eyre::Context as EyreContext;
 use const_format::formatcp;
 use daemonize2::Daemonize;
-use mcserver_core::{PID_FILE_PATH, TEMP_DIR};
 use tokio::runtime::Runtime;
 
 use crate::{
     args::{Args, Command},
+    consts::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
 };
 
 mod args;
 mod client;
+mod consts;
+mod core;
 mod server;
 mod servers;
 

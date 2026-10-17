@@ -3,10 +3,6 @@ use std::{future::pending, io::IsTerminal, mem, path::PathBuf};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
 use kdl::KdlDocument;
-use mcserver_core::{
-    ClientMessage, Config, LineBuffer, ServerMessage, config, display_bytes, read_message,
-    write_message,
-};
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
@@ -20,7 +16,10 @@ use tokio::{
     time::sleep,
 };
 
-use crate::servers;
+use crate::{
+    core::{ClientMessage, Config, LineBuffer, ServerMessage, config, display_bytes},
+    read_message, servers, write_message,
+};
 
 #[derive(Debug)]
 enum ServerState {
@@ -107,7 +106,7 @@ impl App {
             .map(PathBuf::into_string)
             .collect::<Result<Vec<String>, PathBuf>>()
             // TODO: put question mark symbols where there is non utf-8 data
-            .map_err(mcserver_core::Error::NonUtf8Path)
+            .map_err(crate::core::Error::NonUtf8Path)
             .into_diagnostic()?;
 
         Ok(Self {
