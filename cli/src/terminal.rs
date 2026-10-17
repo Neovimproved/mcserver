@@ -6,14 +6,16 @@ use std::{
     time::Duration,
 };
 
-use mcserver_core::{SOCKET_PATH, TCP_PORT};
+use futures::StreamExt;
+use inotify::{Inotify, WatchMask};
+use mcserver_core::{SOCKET_FILE_NAME, SOCKET_PATH, TCP_PORT, TEMP_DIR};
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::DefaultTerminal;
 use tokio::{
     fs, io,
     net::{TcpStream, UnixStream},
     process::Command,
-    time::sleep,
+    time::{sleep, timeout},
 };
 
 const DAEMON_EXECUTABLE_NAME: &str = "mcserver-daemon";
@@ -68,7 +70,6 @@ async fn spin_up_server_instance() -> miette::Result<()> {
 }
 
 pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
-    eprintln!("Unix connecting...");
     let stream = match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => stream,
         Err(err) => match err.kind() {
@@ -76,7 +77,38 @@ pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
                 // spin it up!! 🕸️
                 spin_up_server_instance().await?;
 
-                sleep(Duration::from_millis(100)).await;
+                let inotify = Inotify::init()
+                    .into_diagnostic()
+                    .wrap_err("Failed to initialize inotify instance")?;
+
+                inotify
+                    .watches()
+                    .add(TEMP_DIR, WatchMask::MODIFY | WatchMask::CREATE)
+                    .into_diagnostic()
+                    .wrap_err("Failed to add inotify watch")?;
+
+                let event_buffer = [0u8; 4096];
+
+                let mut event_stream = inotify
+                    .into_event_stream(event_buffer)
+                    .into_diagnostic()
+                    .wrap_err("Failed to create event stream")?;
+
+                while let Some(event) = timeout(Duration::from_secs(1), event_stream.next())
+                    .await
+                    .into_diagnostic()
+                    .wrap_err("Server timed out after 1 second")?
+                {
+                    if let Some(name) = event
+                        .into_diagnostic()
+                        .wrap_err("Failed to read event from inotify stream")?
+                        .name
+                        && name == SOCKET_FILE_NAME
+                    {
+                        break;
+                    }
+                }
+
                 UnixStream::connect(SOCKET_PATH)
                     .await
                     .into_diagnostic()
