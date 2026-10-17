@@ -44,9 +44,12 @@
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
         in
         {
-          default = craneLib.buildPackage commonArgs // {
-            inherit cargoArtifacts;
-          };
+          default = craneLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+            }
+          );
         }
       );
 
