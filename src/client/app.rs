@@ -1,9 +1,10 @@
 use std::{
     fmt::{Debug, Display},
-    future::pending,
+    future::{Pending, pending},
     io::IsTerminal,
     mem,
     path::PathBuf,
+    pin::Pin,
 };
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
@@ -21,7 +22,7 @@ use ratatui::{
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     pin,
-    time::sleep,
+    time::{Sleep, sleep},
 };
 
 use crate::{
@@ -72,6 +73,7 @@ pub struct App {
     mode: Mode,
     document: Option<KdlDocument>,
     servers: Vec<ServerEntry>,
+    server_scroll: usize,
     selected_server: usize,
     exiting: bool,
 }
@@ -127,6 +129,7 @@ impl App {
             document,
             servers,
             selected_server: 0usize,
+            server_scroll: 0usize,
             mode: Mode::Selecting,
             exiting: false,
         })
@@ -226,7 +229,9 @@ impl App {
                 // KeyCode::Esc => self.exit(),
                 KeyCode::Char(ch) => match ch {
                     'q' => self.exit(),
-                    'd' => todo!("Implement deletion"),
+                    'D' => {
+                        self.mode = todo!();
+                    }
                     's' => todo!("Implement manual server list synchronization"),
 
                     'u' => {
@@ -335,6 +340,81 @@ impl App {
         Ok(())
     }
 
+    pub async fn handle_blink_event(
+        &mut self,
+        blink_event: &mut Pin<&mut Either<Sleep, Pending<()>>>,
+    ) -> miette::Result<bool> {
+        blink_event.set(if let Some(blink_interval) = self.config.blink_interval {
+            Either::Left(sleep(blink_interval))
+        } else {
+            Either::Right(pending())
+        });
+
+        Ok(if let Mode::Console { blink, .. } = &mut self.mode {
+            *blink = !*blink;
+            true
+        } else {
+            false
+        })
+    }
+
+    pub async fn read_message(
+        &mut self,
+        mut reader: impl AsyncReadExt + Unpin,
+        length: io::Result<u32>,
+    ) -> miette::Result<()> {
+        let length = match length {
+            Ok(length) => length,
+            Err(err) => match err.kind() {
+                io::ErrorKind::UnexpectedEof => {
+                    stderr_log!("Server closed");
+                    return Err(err)
+                        .into_diagnostic()
+                        .wrap_err("Server connection severed");
+                }
+                _ => return Err(err).into_diagnostic(),
+            },
+        };
+
+        match read_message!(reader, length)
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to receive message from server")?
+        {
+            ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
+            ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
+            ServerMessage::Closed => {
+                if let Mode::Console { input, state, .. } = &mut self.mode {
+                    *input = "Press enter to return...".to_string();
+                    *state = ServerState::Dead;
+                }
+            }
+            ServerMessage::Message(message) => {
+                stderr_log!("Received a message from the server: {message}");
+            }
+            ServerMessage::AlreadyStarted => {
+                stderr_log!("The server has already started apparently");
+            }
+            ServerMessage::NotAttached => {
+                stderr_log!("The server has not yet started apparently");
+            }
+            ServerMessage::Output(bytes) => {
+                if let Mode::Console { output, .. } = &mut self.mode {
+                    output.push(display_bytes(&bytes).to_string());
+                }
+            }
+            ServerMessage::History(history) => {
+                if let Mode::Console { output, .. } = &mut self.mode {
+                    history
+                        .into_iter()
+                        .for_each(|line| output.push(display_bytes(&line).to_string()));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn run(
         &mut self,
         terminal: &mut DefaultTerminal,
@@ -350,6 +430,8 @@ impl App {
 
         pin!(blink_event);
 
+        let mut redraw = true;
+
         loop {
             if self.exiting {
                 writer
@@ -360,76 +442,36 @@ impl App {
                 break Ok(());
             }
 
-            terminal
-                .draw(|frame| self.render(frame))
-                .into_diagnostic()
-                .wrap_err("Failed to render tui")?;
-
-            tokio::select! {
-                    event = &mut event_reader.next() => {
-                        let Some(event) = event else {
-                            bail!("Failed to read from terminal");
-                        };
-
-                        let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
-                            // only care about those keys!!
-                            continue;
-                        };
-
-                        self.handle_keycode(key, &mut writer).await?;
-                    }
-
-                    _ = &mut blink_event => {
-                        blink_event.set(if let Some(blink_interval) = self.config.blink_interval {
-                            Either::Left(sleep(blink_interval))
-                        } else {
-                            Either::Right(pending())
-                        });
-
-                        if let Mode::Console { blink, .. } = &mut self.mode {
-                            *blink = !*blink;
-                        }
-                    }
-
-                    length = reader.read_u32() => {
-                        let length = match length {
-                            Ok(length) => length,
-                            Err(err) => match err.kind() {
-                                io::ErrorKind::UnexpectedEof => {
-                                    stderr_log!("Server closed");
-                                    return Err(err).into_diagnostic().wrap_err("Server connection severed");
-                                },
-                                _ => return Err(err).into_diagnostic(),
-                            },
-                        };
-
-                        match read_message!(reader, length).await.into_diagnostic().wrap_err("Failed to receive message from server")? {
-                            ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
-                            ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
-                            ServerMessage::Closed => if let Mode::Console { input, state, .. } = &mut self.mode {
-                                *input = "Press enter to return...".to_string();
-                                *state = ServerState::Dead;
-                            },
-                            ServerMessage::Message(message) => {
-                                stderr_log!("Received a message from the server: {message}");
-                            },
-                            ServerMessage::AlreadyStarted => {
-                                stderr_log!("The server has already started apparently");
-                            },
-                            ServerMessage::NotAttached => {
-                                stderr_log!("The server has not yet started apparently");
-                            },
-                            ServerMessage::Output(bytes) => if let Mode::Console { output, .. } = &mut self.mode {
-                                output.push(display_bytes(&bytes).to_string());
-                            },
-                            ServerMessage::History(history) => if let Mode::Console { output, .. } = &mut self.mode {
-                                history.into_iter().for_each(|line|{
-                                    output.push(display_bytes(&line).to_string())
-                                });
-                            }
-                        }
-                    }
+            if redraw {
+                stderr_log!("Redrawing");
+                terminal
+                    .draw(|frame| self.render(frame))
+                    .into_diagnostic()
+                    .wrap_err("Failed to render tui")?;
             }
+
+            redraw = tokio::select! {
+                event = &mut event_reader.next() => {
+                    let Some(event) = event else {
+                        bail!("Failed to read from terminal");
+                    };
+
+                    let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
+                        // only care about those keys!!
+                        continue;
+                    };
+
+                    self.handle_keycode(key, &mut writer).await?;
+                    true
+                }
+
+                _ = &mut blink_event => self.handle_blink_event(&mut blink_event).await?,
+
+                length = reader.read_u32() => {
+                    self.read_message(&mut reader, length).await?;
+                    true
+                },
+            };
         }
     }
 
