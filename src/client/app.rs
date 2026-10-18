@@ -106,25 +106,6 @@ fn readable_pretty(object: impl Debug) -> String {
     transformed
 }
 
-macro_rules! try_attach {
-    ($app:ident, $writer:expr) => {{
-        // let name = $app
-        //     .servers
-        //     .get($app.selected_server)
-        //     .wrap_err("Invalid server index")?
-        //     .clone();
-
-        let name: String = todo!();
-
-        // $app.request_attach($writer, name)
-        //     .await
-        //     .into_diagnostic()
-        //     .wrap_err("Failed to attach to server")?;
-
-        $app.mode = Mode::output($app.selected_server, todo!());
-    }};
-}
-
 enum NestEntry<'a> {
     GroupEnd,
     Group(&'a mut ServerGroup),
@@ -163,6 +144,8 @@ impl App {
         let mut qualifier: Vec<&str> = vec![];
 
         while let Some(back_iter) = iterators.last_mut() {
+            let mut exhausted = true;
+
             for mut entry in back_iter {
                 if self.selected_server == counter {
                     match entry {
@@ -184,11 +167,15 @@ impl App {
                 {
                     qualifier.push(&server_group.name);
                     iterators.push(server_group.children.iter_mut());
+                    exhausted = false;
                     break;
                 }
             }
 
-            iterators.pop();
+            if exhausted {
+                iterators.pop();
+                qualifier.pop();
+            }
         }
 
         let Some(name) = name else {
@@ -210,13 +197,22 @@ impl App {
         match &mut self.mode {
             Mode::Selecting => match key.code {
                 KeyCode::Enter => {
-                    let res = self
-                        .try_select(writer)
+                    let Some(name) = self
+                        .try_select(&mut writer)
                         .await
                         .into_diagnostic()
-                        .wrap_err("Failed to select item")?;
+                        .wrap_err("Failed to select item")?
+                    else {
+                        return Ok(());
+                    };
 
-                    stderr_log!("{res:?}");
+                    write_message!(writer, ClientMessage::Attach { name: name.clone() })
+                        .await
+                        .into_diagnostic()
+                        .wrap_err("Failed to send attach message to server")?;
+
+                    stderr_log!("{name:?}");
+                    self.mode = Mode::output(self.selected_server, name);
                 }
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
                 // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
