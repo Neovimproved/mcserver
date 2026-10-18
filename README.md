@@ -8,6 +8,10 @@ If you have the [rust toolchain](https://rust-lang.org/tools/install/) installed
 ```
 cargo install mcserver
 ```
+Or if you don't want to wait
+```
+cargo binstall mcserver
+```
 
 ### Nix
 
