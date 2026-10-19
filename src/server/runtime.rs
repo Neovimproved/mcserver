@@ -26,7 +26,7 @@ use crate::{
     messages::{ClientMessage, ServerMessage},
     metadata, read_message,
     server::types::{Request, ServerCommunicator},
-    write_message,
+    write_bytes, write_message,
 };
 
 async fn spawn_server_process(
@@ -56,7 +56,7 @@ async fn start_server(
     name: &str,
     mut message_receiver: UnboundedReceiver<ClientMessage>,
     mut request_receiver: UnboundedReceiver<Request>,
-    sender: broadcast::Sender<ServerMessage>,
+    sender: broadcast::Sender<Vec<u8>>,
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
@@ -89,7 +89,7 @@ async fn start_server(
                 history.push(bytes_read.to_owned());
 
                 // TODO: (potentially) encode before sending so that it only is encoded once
-                let _ = sender.send(ServerMessage::Output(bytes_read.to_owned()));
+                let _ = sender.send(bitcode::encode(&ServerMessage::Output(bytes_read.to_owned())));
                 continue;
             }
 
@@ -108,11 +108,11 @@ async fn start_server(
                     ClientMessage::Kill => {
                         match child.kill().await {
                             Ok(()) => {
-                                sender.send(ServerMessage::KillSuccess)?;
+                                sender.send(bitcode::encode(&ServerMessage::KillSuccess))?;
                                 break;
                             }
                             Err(err) => {
-                                sender.send(ServerMessage::KillFailure(err.to_string()))?;
+                                sender.send(bitcode::encode(&ServerMessage::KillFailure(err.to_string())))?;
                                 return Err(eyre!("Failed to kill server"));
                             }
                         };
@@ -120,6 +120,7 @@ async fn start_server(
                     ClientMessage::ProgramInput(bytes) => {
                         history.push(bytes.clone());
                         pty.write_all(&bytes).await?;
+                        pty.flush().await.wrap_err("Failed to flush")?;
                     }
                     ClientMessage::SynchronizeServers => {
                         println!("Not implemented yet; sending nothing back");
@@ -147,7 +148,7 @@ async fn server_lifecycle(
     name: String,
     message_receiver: UnboundedReceiver<ClientMessage>,
     request_receiver: UnboundedReceiver<Request>,
-    sender: broadcast::Sender<ServerMessage>,
+    sender: broadcast::Sender<Vec<u8>>,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<()> {
     println!("Starting {name}");
@@ -176,7 +177,7 @@ async fn initialize_server(
 ) -> Result<(
     UnboundedSender<ClientMessage>,
     UnboundedSender<Request>,
-    broadcast::Receiver<ServerMessage>,
+    broadcast::Receiver<Vec<u8>>,
 )> {
     let (client_message_sender, client_message_receiver) = unbounded_channel();
 
@@ -281,7 +282,8 @@ async fn serve_client(
                                     continue;
                                 },
                             };
-                            write_message!(writer, message).await?;
+
+                            write_bytes!(writer, message).await?;
                         }
 
                         res = reader.read_u32() => {
