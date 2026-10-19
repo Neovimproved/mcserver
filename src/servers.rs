@@ -21,7 +21,7 @@ pub struct ServerObject {
     pub online: bool,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ServerEntry {
     Group(ServerGroup),
     Object(ServerObject),
@@ -47,18 +47,6 @@ impl ServerEntry {
             Self::Group(server_group) => &server_group.name,
             Self::Object(server_object) => &server_object.name,
         }
-    }
-}
-
-impl Ord for ServerEntry {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.name().cmp(other.name())
-    }
-}
-
-impl PartialOrd for ServerEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
     }
 }
 
