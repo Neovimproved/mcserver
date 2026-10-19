@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::HashSet};
 
 use bitcode::{Decode, Encode};
 use derive_more::Display;
@@ -34,6 +34,17 @@ pub fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
     string
 }
 
+#[derive(Debug, Decode, Clone, Encode, Display)]
+#[display("Synchronization payload")]
+pub struct SynchronizationPayload {
+    pub online_servers: HashSet<String>,
+}
+
+// TODO: use this instead of forwarding server messages
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum ServerInstruction {}
+
 #[derive(Clone, Debug, Decode, Display, Encode)]
 pub enum ServerMessage {
     #[display("Child has not been successfully killed ({_0})")]
@@ -63,6 +74,8 @@ pub enum ServerMessage {
         acc
     }))]
     History(LineBuffer<Vec<u8>>),
+
+    SynchronizationPayload(SynchronizationPayload),
 }
 
 #[derive(Debug, Decode, Display, Encode)]
@@ -80,7 +93,7 @@ pub enum ClientMessage {
     ProgramInput(Vec<u8>),
 
     #[display("Request for synchronization of servers")]
-    SynchronizeServers,
+    SynchronizationRequest,
 }
 
 #[macro_export]

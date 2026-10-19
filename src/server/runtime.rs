@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, path::PathBuf, sync::Arc};
+use std::{ffi::OsStr, sync::Arc};
 
 use color_eyre::{
     Result,
@@ -23,7 +23,7 @@ use crate::{
     config::{self, Config},
     consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
     line_buffer::LineBuffer,
-    messages::{ClientMessage, ServerMessage},
+    messages::{ClientMessage, ServerMessage, SynchronizationPayload},
     metadata, read_message,
     server::types::{Request, ServerCommunicator},
     write_bytes, write_message,
@@ -37,8 +37,7 @@ async fn spawn_server_process(
     let (pty, pts) = pty_process::open()?;
     pty.resize(pty_process::Size::new(24, 80))?;
 
-    let mut server_dir = PathBuf::from(config.servers_directory.to_string());
-    server_dir.push(name);
+    let server_dir = config.servers_directory.path.join(name);
 
     let child = Command::new("java")
         .arg("-jar")
@@ -122,9 +121,7 @@ async fn start_server(
                         pty.write_all(&bytes).await?;
                         pty.flush().await.wrap_err("Failed to flush")?;
                     }
-                    ClientMessage::SynchronizeServers => {
-                        println!("Not implemented yet; sending nothing back");
-                    }
+                    _ => {}
                 }
             }
 
