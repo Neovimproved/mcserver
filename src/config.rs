@@ -81,6 +81,7 @@ impl AsRef<Path> for ServersDirectory {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct Config {
     pub default_java_args: Vec<String>,
     pub servers_directory: ServersDirectory,

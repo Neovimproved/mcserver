@@ -41,15 +41,6 @@ impl ServerEntry {
     }
 }
 
-impl ServerEntry {
-    fn name(&self) -> &str {
-        match self {
-            Self::Group(server_group) => &server_group.name,
-            Self::Object(server_object) => &server_object.name,
-        }
-    }
-}
-
 pub async fn make_read_dir(dir: &Path) -> miette::Result<ReadDir> {
     fs::read_dir(dir)
         .await
@@ -106,6 +97,9 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
     Ok(children)
 }
 
+// TODO: replace these functions with tests
+
+#[allow(dead_code)]
 fn print_entries(entries: &[ServerEntry], depth: usize) {
     let increased_depth = depth + 1;
 
@@ -124,6 +118,7 @@ fn print_entries(entries: &[ServerEntry], depth: usize) {
     }
 }
 
+#[allow(dead_code)]
 #[tokio::main]
 async fn main() -> miette::Result<()> {
     let dirs = read(Path::new("/home/finnian/old-servers/")).await?;

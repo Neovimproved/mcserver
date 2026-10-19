@@ -1,9 +1,8 @@
-#![allow(unused)]
+#![allow(dead_code)]
 
 use std::{
     convert::Infallible,
     ops::Deref,
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     str::FromStr,
 };

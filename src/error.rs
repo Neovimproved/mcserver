@@ -5,7 +5,6 @@ use std::{
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     result,
-    time::SystemTimeError,
 };
 
 use derive_more::{Display, Error, From};
@@ -54,9 +53,6 @@ pub enum Error {
     // TODO: replace non utf-8 bytes with question mark symbol
     #[display("`{}` could not be converted to string", display_path(_0))]
     NonUtf8Path(#[error(not(source))] PathBuf),
-
-    #[display("{_0}")]
-    SystemTime(SystemTimeError),
 
     #[display("Connection type {_0} is not supported")]
     UnsupportedConnectionType(#[error(not(source))] String),

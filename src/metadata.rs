@@ -1,17 +1,19 @@
+#![allow(dead_code)]
+
 use std::{
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{SystemTime, SystemTimeError},
 };
 
-use derive_more::{Display, Error};
+use derive_more::{Display, Error, From};
 use tokio::{fs, io};
 
 use crate::{
-    consts::{JAR_FILE_NAME, METADATA_DIRECTORY},
-    error::{Result, display_path},
+    consts::{JAR_FILE_NAME, LAST_USED_FILE_NAME, METADATA_DIRECTORY},
+    error::display_path,
 };
 
-#[derive(Debug, Display, Error)]
+#[derive(Debug, Display, Error, From)]
 pub enum MetadataError {
     #[display(
         "Metadata directory was not found (expected it to exist at: {})",
@@ -19,8 +21,14 @@ pub enum MetadataError {
     )]
     DirectoryNotFound(#[error(not(source))] PathBuf),
 
+    #[display("{_0}")]
+    Io(io::Error),
+
     #[display("Failed to read jar file ({}) with error: {_1}", display_path(_0))]
     JarFileRead(PathBuf, io::Error),
+
+    #[display("{_0}")]
+    SystemTime(SystemTimeError),
 }
 
 pub type MetadataResult<T> = std::result::Result<T, MetadataError>;
@@ -42,7 +50,7 @@ pub fn dir(server_dir: &Path) -> PathBuf {
     server_dir.join(METADATA_DIRECTORY)
 }
 
-pub async fn get_jar_file(mut server_dir: PathBuf) -> Result<PathBuf> {
+pub async fn get_jar_file(mut server_dir: PathBuf) -> MetadataResult<PathBuf> {
     let mut file_path = dir(&server_dir);
     file_path.push(JAR_FILE_NAME);
 
@@ -62,14 +70,14 @@ pub async fn get_jar_file(mut server_dir: PathBuf) -> Result<PathBuf> {
     Ok(server_dir)
 }
 
-fn get_time_since_unix_epoch_secs() -> Result<u64> {
+fn get_time_since_unix_epoch_secs() -> MetadataResult<u64> {
     Ok(SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)?
         .as_secs())
 }
 
-pub async fn get_last_used(metadata_dir: &Path) -> Result<LastUsed> {
-    let bytes = match fs::read(metadata_dir).await {
+pub async fn get_last_used(metadata_dir: &Path) -> MetadataResult<LastUsed> {
+    let bytes = match fs::read(metadata_dir.join(LAST_USED_FILE_NAME)).await {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(LastUsed::Never),
         Err(err) => return Err(err.into()),
@@ -106,11 +114,11 @@ pub async fn get_last_used(metadata_dir: &Path) -> Result<LastUsed> {
     }))
 }
 
-pub async fn get(server_dir: &Path) -> Result<Metadata> {
+pub async fn get(server_dir: &Path) -> MetadataResult<Metadata> {
     let dir = dir(server_dir);
 
     if !dir.try_exists()? {
-        return Err(MetadataError::DirectoryNotFound(dir).into());
+        return Err(dir.into());
     }
 
     let jar_file = get_jar_file(server_dir.to_path_buf()).await?;

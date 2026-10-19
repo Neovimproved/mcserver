@@ -1,9 +1,8 @@
 use std::{
-    fmt::{Debug, Display},
+    fmt::Debug,
     future::{Pending, pending},
     io::IsTerminal,
     mem,
-    path::PathBuf,
     pin::Pin,
 };
 
@@ -14,10 +13,9 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    macros::span,
     style::{Color, Style, Stylize},
     text::{Line, Span, ToSpan},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -30,7 +28,7 @@ use crate::{
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry, ServerGroup},
+    servers::{self, ServerEntry},
     write_message,
 };
 
@@ -44,6 +42,7 @@ enum ServerState {
 #[derive(Debug)]
 enum Mode {
     Selecting,
+    Deletion,
     Console {
         attached_server: usize,
         name: String,
@@ -108,11 +107,6 @@ fn readable_pretty(object: impl Debug) -> String {
     transformed
 }
 
-enum NestEntry<'a> {
-    GroupEnd,
-    Group(&'a mut ServerGroup),
-}
-
 impl App {
     pub async fn try_new() -> miette::Result<Self> {
         let (config, document) = config::read()
@@ -136,10 +130,7 @@ impl App {
     }
 
     // returns the fully qualified server name if found
-    pub async fn try_select(
-        &mut self,
-        mut writer: impl AsyncWriteExt + Unpin,
-    ) -> io::Result<Option<String>> {
+    pub async fn try_select(&mut self, mut writer: impl AsyncWriteExt + Unpin) -> io::Result<()> {
         let mut counter = 0;
         let mut name: Option<String> = None;
 
@@ -149,16 +140,17 @@ impl App {
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
 
-            for mut entry in back_iter {
+            for entry in back_iter {
                 if self.selected_server == counter {
                     match entry {
                         ServerEntry::Group(server_group) => {
                             server_group.expanded = !server_group.expanded;
-                            return Ok(None);
+                            return Ok(());
                         }
                         ServerEntry::Object(server_object) => {
                             qualifier.push(&server_object.name);
-                            return Ok(Some(qualifier.join("/")));
+                            name = Some(qualifier.join("/"));
+                            break;
                         }
                     }
                 }
@@ -175,6 +167,10 @@ impl App {
                 }
             }
 
+            if name.is_some() {
+                break;
+            }
+
             if exhausted {
                 iterators.pop();
                 qualifier.pop();
@@ -183,13 +179,14 @@ impl App {
 
         let Some(name) = name else {
             stderr_log!("{counter}");
-            return Ok(None);
+            return Ok(());
         };
 
-        // let name = server_name.into();
         write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
 
-        Ok(Some(name))
+        self.mode = Mode::output(self.selected_server, name);
+
+        Ok(())
     }
 
     pub async fn handle_keycode(
@@ -199,28 +196,18 @@ impl App {
     ) -> miette::Result<()> {
         match &mut self.mode {
             Mode::Selecting => match key.code {
-                KeyCode::Enter => {
-                    let Some(name) = self
-                        .try_select(&mut writer)
-                        .await
-                        .into_diagnostic()
-                        .wrap_err("Failed to select item")?
-                    else {
-                        return Ok(());
-                    };
-
-                    write_message!(writer, ClientMessage::Attach { name: name.clone() })
-                        .await
-                        .into_diagnostic()
-                        .wrap_err("Failed to send attach message to server")?;
-
-                    stderr_log!("{name:?}");
-                    self.mode = Mode::output(self.selected_server, name);
-                }
+                KeyCode::Enter => self
+                    .try_select(&mut writer)
+                    .await
+                    .into_diagnostic()
+                    .wrap_err("Failed to select item")?,
                 // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
                 // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
                 KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                 KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+
+                KeyCode::Char('g') => self.selected_server = 0,
+                KeyCode::Char('G') => self.selection_bottom(),
 
                 // TODO: these should actually by different from left and right
                 KeyCode::Tab => todo!("Implement tab"),
@@ -230,7 +217,7 @@ impl App {
                 KeyCode::Char(ch) => match ch {
                     'q' => self.exit(),
                     'D' => {
-                        self.mode = todo!();
+                        self.mode = Mode::Deletion;
                     }
 
                     's' => write_message!(writer, ClientMessage::SynchronizeServers)
@@ -248,6 +235,8 @@ impl App {
                 _ => {}
             },
 
+            Mode::Deletion => todo!(),
+
             Mode::Console {
                 state: ServerState::Dead,
                 ..
@@ -262,19 +251,11 @@ impl App {
             Mode::Console { name, state, .. } if let ServerState::Escaping = state => {
                 match key.code {
                     KeyCode::Backspace => todo!(),
-                    KeyCode::Enter => {
-                        stderr_log!("Trying to select rn");
-                        if let Some(name) = self
-                            .try_select(writer)
-                            .await
-                            .into_diagnostic()
-                            .wrap_err("Failed to attach to server")?
-                        {
-                            self.mode = Mode::output(self.selected_server, name);
-                        } else {
-                            stderr_log!("None found!");
-                        }
-                    }
+                    KeyCode::Enter => self
+                        .try_select(writer)
+                        .await
+                        .into_diagnostic()
+                        .wrap_err("Failed to attach to server")?,
                     KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                     KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
@@ -485,97 +466,109 @@ impl App {
         (reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
         name: String,
     ) -> miette::Result<()> {
-        // self.selected_server = self
-        //     .servers
-        //     .iter()
-        //     .position(|server| *server == name)
-        //     .wrap_err("Server not found")?;
-
-        self.selected_server = todo!();
-
-        // TODO: attach here
-        // try_attach!(self, &mut writer);
+        // TODO: use correct server
+        self.try_select(&mut writer)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| format!("Failed to attach to {name}"))?;
 
         self.run(terminal, (reader, writer)).await
     }
 
-    fn iterate_entries<'a>(
+    fn display_entries<'a>(
         &self,
         entries: &'a [ServerEntry],
-        depth: usize,
+        accumulator: &mut Vec<Line<'a>>,
+        base_indentation: &str,
         counter: &mut usize,
         attached: usize,
-    ) -> Vec<Line<'a>> {
-        let mut lines = vec![];
-        let indentation = " ".repeat(depth * 2);
-        let incremented_depth = depth + 1;
+    ) {
+        for (index, entry) in entries.iter().enumerate() {
+            let mut spans = if index == entries.len().saturating_sub(1) {
+                vec![Span::from(format!("{base_indentation}└╴"))]
+            } else {
+                vec![Span::from(format!("{base_indentation}├╴"))]
+            };
 
-        for entry in entries.iter() {
             match entry {
                 ServerEntry::Group(server_group) => {
                     let line = match (*counter == self.selected_server, server_group.expanded) {
                         (true, true) => {
-                            Line::from(format!("{indentation}v {}/", server_group.name)).bold()
+                            spans.push(server_group.name.to_span());
+                            Line::from(spans).bg(Color::Blue)
                         }
+                        // TODO: maybe make it look different for expanded
                         (true, false) => {
-                            Line::from(format!("{indentation}> {}/", server_group.name)).bold()
+                            spans.push(server_group.name.to_span());
+                            Line::from(spans).bg(Color::Blue)
                         }
-                        (false, _) => Line::from(format!("{indentation}  {}/", server_group.name)),
+                        (false, _) => {
+                            spans.push(server_group.name.to_span());
+                            Line::from(spans)
+                        }
                     };
 
-                    lines.push(line);
+                    // │ ├╴󰝰 src
+                    // │   15 ┃ │   │   │   │   │   │   │   Span::from(format!("{base_indentation}  {}/", server_group.name))
+                    // │ │ ├╴󰝰 client                         │   14 ▁ │   │   │   │   │   │   }
+                    // │ │ │ ├╴ app.rs
+                    //
+
+                    accumulator.push(line);
+                    // match accumulator.last_mut() {
+                    //     Some(last) => last.extend(spans),
+                    //     None => accumulator.push(Line::from(spans)),
+                    // }
 
                     *counter += 1;
 
                     if server_group.expanded {
-                        lines.extend(self.iterate_entries(
+                        self.display_entries(
                             &server_group.children,
-                            incremented_depth,
+                            accumulator,
+                            &format!("{base_indentation}│   "),
                             counter,
                             attached,
-                        ));
+                        );
                     }
                 }
                 ServerEntry::Object(server_object) => {
                     let line = match (*counter == self.selected_server, *counter == attached) {
-                        (true, true) => Line::from(vec![
-                            span!(indentation),
-                            '>'.to_span(),
-                            '●'.green(),
-                            server_object.name.to_span(),
-                        ])
-                        .fg(Color::White)
-                        .bg(Color::Black)
-                        .bold(),
-                        (true, false) => {
-                            Line::from(format!("{indentation}> {}", server_object.name)).bold()
+                        (true, attached) => {
+                            match attached {
+                                true => spans.extend(["● ".green(), server_object.name.to_span()]),
+                                false => spans.push(server_object.name.to_span().bold()),
+                            };
+
+                            Line::from(spans).bg(Color::Blue)
                         }
-                        (false, true) => {
-                            Line::from(vec![span!(indentation), ' '.to_span(), '●'.green()])
-                                .fg(Color::White)
-                                .bg(Color::Black)
-                        }
-                        (false, false) => {
-                            Line::from(format!("{indentation}  {}", server_object.name))
+
+                        (false, attached) => {
+                            match attached {
+                                true => spans.extend([' '.to_span(), '●'.green()]),
+                                false => spans.push(server_object.name.to_span()),
+                            }
+                            Line::from(spans)
                         }
                     };
 
-                    lines.push(line);
+                    accumulator.push(line);
 
                     *counter += 1;
                 }
             }
         }
-
-        lines
     }
 
-    fn draw_servers_list_widget(&self, height_available: u16) -> List<'_> {
+    fn draw_servers_list_widget(&self, _height_available: u16) -> List<'_> {
         let mut counter = 0;
 
-        let lines = self.iterate_entries(
+        let mut lines = vec![];
+
+        self.display_entries(
             &self.servers,
-            0,
+            &mut lines,
+            "",
             &mut counter,
             match self.mode {
                 Mode::Console {
@@ -585,10 +578,7 @@ impl App {
             },
         );
 
-        // stderr_log!("Servers: {:?}", self.servers);
-        // stderr_log!("Lines: {lines:?}");
-
-        let length = lines.len();
+        let _length = lines.len();
 
         // TODO: use this
         List::new(lines).block(Block::new().title("Servers").borders(Borders::ALL))
@@ -704,7 +694,7 @@ impl App {
                         len += 1;
                     }
                 }
-                ServerEntry::Object(server_object) => len += 1,
+                ServerEntry::Object(_) => len += 1,
             }
         }
 
@@ -713,12 +703,16 @@ impl App {
 
     fn selection_down(&mut self) {
         let old = self.selected_server;
-        let mut length = Self::count_len(&self.servers);
-        self.selected_server = usize::min(self.selected_server + 1, length - 1);
+        let length = Self::count_len(&self.servers);
+        self.selected_server = usize::min(self.selected_server + 1, length.saturating_sub(1));
 
         if old != self.selected_server {
             stderr_log!("New: {}", self.selected_server);
         }
+    }
+
+    fn selection_bottom(&mut self) {
+        self.selected_server = Self::count_len(&self.servers).saturating_sub(1);
     }
 
     pub fn exit(&mut self) {

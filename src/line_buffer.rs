@@ -36,24 +36,8 @@ impl<T, const CAPACITY: usize> LineBuffer<T, CAPACITY> {
         self.lines.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
-    }
-
-    pub fn extend(&mut self, other: LineBuffer<T>) {
-        self.lines.extend(other.lines);
-    }
-
     pub fn iter(&self) -> vec_deque::Iter<'_, T> {
         self.lines.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> vec_deque::IterMut<'_, T> {
-        self.lines.iter_mut()
-    }
-
-    pub fn into_vec_deque(self) -> VecDeque<T> {
-        self.lines
     }
 }
 
