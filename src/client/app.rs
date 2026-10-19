@@ -232,7 +232,11 @@ impl App {
                     'D' => {
                         self.mode = todo!();
                     }
-                    's' => todo!("Implement manual server list synchronization"),
+
+                    's' => write_message!(writer, ClientMessage::SynchronizeServers)
+                        .await
+                        .into_diagnostic()
+                        .wrap_err("Failed to make synchronization request")?,
 
                     'u' => {
                         stderr_log!("{}", readable_pretty(&self.servers));

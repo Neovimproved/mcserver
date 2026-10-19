@@ -78,6 +78,9 @@ pub enum ClientMessage {
 
     #[display("Program input: {}", display_bytes(_0))]
     ProgramInput(Vec<u8>),
+
+    #[display("Request for synchronization of servers")]
+    SynchronizeServers,
 }
 
 #[macro_export]

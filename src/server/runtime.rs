@@ -121,6 +121,9 @@ async fn start_server(
                         history.push(bytes.clone());
                         pty.write_all(&bytes).await?;
                     }
+                    ClientMessage::SynchronizeServers => {
+                        println!("Not implemented yet; sending nothing back");
+                    }
                 }
             }
 
@@ -302,6 +305,7 @@ async fn serve_client(
                                 ClientMessage::Attach { name } => break ServeAction::Attach(name),
                                 ClientMessage::Detach => break ServeAction::Prompt,
                                 ClientMessage::Kill | ClientMessage::ProgramInput(..) => message_sender.send(message)?,
+                                ClientMessage::SynchronizeServers => todo!(),
                             }
                         }
                     }
