@@ -28,6 +28,9 @@ pub enum Command {
     Attach {
         #[arg(value_hint = ValueHint::DirPath)]
         // TODO: maybe make optional (attach to default if none)
-        server: ServerArgument,
+        server: Option<ServerArgument>,
     },
+
+    #[command(about = "Output a tree-like output of all of the servers")]
+    Tree,
 }

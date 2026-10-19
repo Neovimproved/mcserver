@@ -4,12 +4,14 @@ use clap::Parser;
 use color_eyre::eyre::Context as EyreContext;
 use const_format::formatcp;
 use daemonize2::Daemonize;
+use miette::{Context, IntoDiagnostic};
 use tokio::runtime::Runtime;
 
 use crate::{
     args::{Args, Command},
     consts::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
+    servers::ServerGroup,
 };
 
 mod args;
@@ -20,7 +22,6 @@ mod error;
 mod line_buffer;
 mod messages;
 mod metadata;
-mod parser;
 mod server;
 mod servers;
 
@@ -61,6 +62,32 @@ fn server(daemonize: bool) -> color_eyre::Result<()> {
     Ok(())
 }
 
+fn tree() -> miette::Result<()> {
+    let runtime = Runtime::new()
+        .into_diagnostic()
+        .wrap_err("Failed to create runtime")?;
+
+    runtime.block_on(async {
+        let servers_directory = config::read()
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to read config")?
+            .0
+            .servers_directory;
+
+        let entries = servers::read(&servers_directory.path)
+            .await
+            .wrap_err("Failed to read server entries")?;
+
+        println!(
+            "{}",
+            ServerGroup::new(servers_directory.value, entries, true)
+        );
+
+        Ok(())
+    })
+}
+
 fn main() -> miette::Result<()> {
     let args = Args::parse();
 
@@ -77,6 +104,13 @@ fn main() -> miette::Result<()> {
     };
 
     match command {
-        Command::Attach { server } => client::start(args.tcp, Some(server.into())),
+        Command::Attach { server } => {
+            if let Some(server) = server {
+                client::start(args.tcp, Some(server.into()))
+            } else {
+                Ok(())
+            }
+        }
+        Command::Tree => tree(),
     }
 }
