@@ -28,10 +28,6 @@ shellexpand = "3.1.2"
 textwrap = "0.16.4"
 tokio = { version = "1.53.1", features = ["full"] }
 
-# [features]
-# servers-only = []
-
 [[bin]]
 name = "servers"
 path = "src/servers.rs"
-# required-features = ["servers-only"]
