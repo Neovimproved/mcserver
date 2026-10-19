@@ -11,7 +11,7 @@ use derive_more::{Display, Error, From};
 use kdl::KdlError;
 use shellexpand::LookupError;
 
-use crate::{metadata::MetadataError, parser::ParseConfigError};
+use crate::{config::ParseConfigError, metadata::MetadataError};
 
 pub fn display_path(path: &Path) -> String {
     let mut buf = String::new();

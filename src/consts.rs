@@ -1,7 +1,4 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
-};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use const_format::formatcp;
 
@@ -23,10 +20,7 @@ pub const MAX_MESSAGE_LENGTH: usize = 1024 * 1024;
 
 pub const CONFIG_DIRECTORY_NAME: &str = "mcserver";
 pub const CONFIG_FILE_NAME: &str = "config.kdl";
-
-pub const DEFAULT_SERVERS_DIRECTORY: &str = "~/Servers";
-
-pub const DEFAULT_BLINK_INTERVAL: Option<Duration> = Some(Duration::from_millis(500));
+pub const CONFIG_FILE_VARIABLE: &str = "MCSERVER_CONFIG_FILE";
 
 // Metadata
 
