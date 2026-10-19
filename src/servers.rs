@@ -1,19 +1,15 @@
 use std::{
     fmt::{self, Display},
-    io::Write,
     path::Path,
 };
 
-use tokio::{
-    fs::{self, ReadDir},
-    io,
-};
-
 use miette::{Context, IntoDiagnostic};
+use tokio::fs::{self, ReadDir};
 
-use mcserver::error::{Error, display_path};
-
-const METADATA_DIRECTORY: &str = ".mcserver";
+use crate::{
+    consts::METADATA_DIRECTORY,
+    error::{Error, display_path},
+};
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ServerGroup {
@@ -23,7 +19,7 @@ pub struct ServerGroup {
 }
 
 impl ServerGroup {
-    fn new(name: String, children: Vec<ServerEntry>, expanded: bool) -> Self {
+    pub fn new(name: String, children: Vec<ServerEntry>, expanded: bool) -> Self {
         Self {
             name,
             children,
@@ -35,7 +31,7 @@ impl ServerGroup {
 impl Display for ServerGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{}", self.name)?;
-        fmt_entries(&self.children, f, "")
+        fmt_entries(&self.children, f, "", 3)
     }
 }
 
@@ -64,7 +60,7 @@ impl ServerEntry {
 impl Display for ServerEntry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ServerEntry::Group(server_group) => fmt_entries(&server_group.children, f, ""),
+            ServerEntry::Group(server_group) => write!(f, "{server_group}"),
             ServerEntry::Object(server_object) => write!(f, "{}", server_object.name),
         }
     }
@@ -74,16 +70,30 @@ pub fn fmt_entries(
     entries: &[ServerEntry],
     f: &mut fmt::Formatter,
     base_indentation: &str,
+    indentation_width: usize,
 ) -> fmt::Result {
     for (idx, entry) in entries.iter().enumerate() {
         match entry {
             ServerEntry::Group(server_group) => {
                 if idx == entries.len().saturating_sub(1) {
                     writeln!(f, "{base_indentation}└╴{}", server_group.name)?;
-                    fmt_entries(&server_group.children, f, &format!("{base_indentation}  "))
+                    fmt_entries(
+                        &server_group.children,
+                        f,
+                        &format!("{base_indentation}{}", " ".repeat(indentation_width)),
+                        indentation_width,
+                    )
                 } else {
                     writeln!(f, "{base_indentation}├╴{}", server_group.name)?;
-                    fmt_entries(&server_group.children, f, &format!("{base_indentation}│ "))
+                    fmt_entries(
+                        &server_group.children,
+                        f,
+                        &format!(
+                            "{base_indentation}│{}",
+                            " ".repeat(indentation_width.saturating_sub(1))
+                        ),
+                        indentation_width,
+                    )
                 }
             }
             ServerEntry::Object(server_object) => {
@@ -155,43 +165,6 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
     Ok(children)
 }
 
-// TODO: replace these functions with tests
-
-fn write_entries(
-    writer: &mut std::io::Stdout,
-    entries: &[ServerEntry],
-    depth: usize,
-) -> io::Result<()> {
-    let increased_depth = depth + 1;
-
-    let base_indentation = " ".repeat(depth.saturating_sub(1) * 2);
-
-    for entry in entries {
-        match entry {
-            ServerEntry::Group(server_group) => {
-                write!(writer, "{base_indentation}v {}", server_group.name)?;
-                write_entries(writer, &server_group.children, increased_depth)?
-            }
-            ServerEntry::Object(server_object) => {
-                println!("{base_indentation}->{}", server_object.name);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-#[allow(dead_code)]
-#[tokio::main]
-async fn main() -> miette::Result<()> {
-    let dirs = read(Path::new("/home/finnian/old-servers/")).await?;
-
-    println!("Servers:");
-    // write_entries(io::stdout(), &dirs, 1);
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod test {
     use std::path::PathBuf;
@@ -255,23 +228,23 @@ mod test {
         let expected = "\
 root
 ├╴group-0
-│ ├╴server-0-group0
-│ └╴server-1-group0
+│  ├╴server-0-group0
+│  └╴server-1-group0
 ├╴group-1
-│ ├╴server-0-group1
-│ └╴server-1-group1
+│  ├╴server-0-group1
+│  └╴server-1-group1
 ├╴subgroup-0-group-0
-│ ├╴server-0-subgroup-0-group-0
-│ └╴server-1-subgroup-0-group-0
+│  ├╴server-0-subgroup-0-group-0
+│  └╴server-1-subgroup-0-group-0
 ├╴subgroup-0-group-1
-│ ├╴server-0-subgroup-0-group-1
-│ └╴server-1-subgroup-0-group-1
+│  ├╴server-0-subgroup-0-group-1
+│  └╴server-1-subgroup-0-group-1
 ├╴subgroup-1-group-0
-│ ├╴server-0-subgroup-1-group-0
-│ └╴server-1-subgroup-1-group-0
+│  ├╴server-0-subgroup-1-group-0
+│  └╴server-1-subgroup-1-group-0
 └╴subgroup-1-group-1
-  ├╴server-0-subgroup-1-group-1
-  └╴server-1-subgroup-1-group-1
+   ├╴server-0-subgroup-1-group-1
+   └╴server-1-subgroup-1-group-1
 ";
 
         assert_eq!(output, expected);
