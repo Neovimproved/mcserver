@@ -27,6 +27,6 @@ ratatui = "0.30.2"
 shellexpand = "3.1.2"
 tokio = { version = "1.53.3", features = ["full"] }
 
-[[bin]]
-name = "servers"
-path = "src/servers.rs"
+[dev-dependencies]
+tempfile = "3.27.0"
+
