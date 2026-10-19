@@ -13,7 +13,7 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span, ToLine, ToSpan},
     widgets::{Block, Borders, List},
 };
@@ -24,7 +24,7 @@ use tokio::{
 };
 
 use crate::{
-    config::{self, Config},
+    config::{self, Config, TerminalInterfaceConfig},
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
@@ -49,7 +49,7 @@ enum Mode {
         input: String,
         output: LineBuffer,
         state: ServerState,
-        blink: bool,
+        blinking: bool,
     },
 }
 
@@ -61,7 +61,7 @@ impl Mode {
             input: String::new(),
             output: LineBuffer::new(),
             state: ServerState::Normal,
-            blink: true,
+            blinking: true,
         }
     }
 }
@@ -89,14 +89,16 @@ macro_rules! log {
 
 #[macro_export]
 macro_rules! log_bytes {
-    ($bytes:expr) => {
+    ($bytes:expr) => {{
         #[cfg(debug_assertions)]
-        io::stderr()
-            .write_all(&$bytes)
-            .await
-            .into_diagnostic()
-            .wrap_err("Failed to write to stderr")?;
-    };
+        if !std::io::stderr().is_terminal() {
+            io::stderr()
+                .write_all(&$bytes)
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to write to stderr")?;
+        }
+    }};
 }
 
 fn readable_pretty(object: impl Debug) -> String {
@@ -139,6 +141,10 @@ impl App {
             mode: Mode::Selecting,
             exiting: false,
         })
+    }
+
+    fn ti_cfg(&self) -> &TerminalInterfaceConfig {
+        &self.config.terminal_interface
     }
 
     // returns the fully qualified server name if found
@@ -232,7 +238,7 @@ impl App {
                         self.mode = Mode::Deletion;
                     }
 
-                    's' => write_message!(writer, ClientMessage::SynchronizeServers)
+                    's' => write_message!(writer, ClientMessage::SynchronizationRequest)
                         .await
                         .into_diagnostic()
                         .wrap_err("Failed to make synchronization request")?,
@@ -341,18 +347,23 @@ impl App {
         &mut self,
         blink_event: &mut Pin<&mut Either<Sleep, Pending<()>>>,
     ) -> miette::Result<bool> {
-        blink_event.set(if let Some(blink_interval) = self.config.blink_interval {
-            Either::Left(sleep(blink_interval))
+        blink_event.set(if let Some(interval) = self.ti_cfg().cursor_blink {
+            Either::Left(sleep(interval))
         } else {
             Either::Right(pending())
         });
 
-        Ok(if let Mode::Console { blink, .. } = &mut self.mode {
-            *blink = !*blink;
-            true
-        } else {
-            false
-        })
+        Ok(
+            if let Mode::Console {
+                blinking: blink, ..
+            } = &mut self.mode
+            {
+                *blink = !*blink;
+                true
+            } else {
+                false
+            },
+        )
     }
 
     pub async fn read_message(
@@ -429,6 +440,8 @@ impl App {
                         .for_each(|line| output.push(display_bytes(&line).to_string()));
                 }
             }
+
+            ServerMessage::SynchronizationPayload(_payload) => todo!(),
         }
 
         Ok(())
@@ -441,7 +454,7 @@ impl App {
     ) -> miette::Result<()> {
         let mut event_reader = EventStream::new();
 
-        let blink_event = if let Some(blink_interval) = self.config.blink_interval {
+        let blink_event = if let Some(blink_interval) = self.ti_cfg().cursor_blink {
             Either::Left(sleep(blink_interval))
         } else {
             Either::Right(pending())
@@ -509,7 +522,7 @@ impl App {
     }
 
     fn display_entries<'a>(
-        &self,
+        &'a self,
         entries: &'a [ServerEntry],
         accumulator: &mut Vec<Line<'a>>,
         base_indentation: &str,
@@ -525,33 +538,31 @@ impl App {
 
             match entry {
                 ServerEntry::Group(server_group) => {
-                    let line = match (*counter == self.selected_server, server_group.expanded) {
-                        (true, true) => {
-                            spans.push(server_group.name.to_span());
-                            Line::from(spans).bg(Color::Blue)
-                        }
-                        // TODO: maybe make it look different for expanded
-                        (true, false) => {
-                            spans.push(server_group.name.to_span());
-                            Line::from(spans).bg(Color::Blue)
-                        }
-                        (false, _) => {
-                            spans.push(server_group.name.to_span());
-                            Line::from(spans)
-                        }
+                    if server_group.expanded {
+                        spans.extend_from_slice(&[
+                            self.ti_cfg()
+                                .group_expanded_symbol
+                                .as_str()
+                                .fg(self.ti_cfg().group_symbol_color),
+                            Span::from(server_group.name.clone()),
+                        ]);
+                    } else {
+                        spans.extend_from_slice(&[
+                            self.ti_cfg()
+                                .group_folded_symbol
+                                .as_str()
+                                .fg(self.ti_cfg().group_symbol_color),
+                            Span::from(server_group.name.clone()),
+                        ]);
                     };
 
-                    // │ ├╴󰝰 src
-                    // │   15 ┃ │   │   │   │   │   │   │   Span::from(format!("{base_indentation}  {}/", server_group.name))
-                    // │ │ ├╴󰝰 client                         │   14 ▁ │   │   │   │   │   │   }
-                    // │ │ │ ├╴ app.rs
-                    //
+                    let line = if *counter == self.selected_server {
+                        Line::from(spans).bg(self.ti_cfg().selected_color)
+                    } else {
+                        Line::from(spans)
+                    };
 
                     accumulator.push(line);
-                    // match accumulator.last_mut() {
-                    //     Some(last) => last.extend(spans),
-                    //     None => accumulator.push(Line::from(spans)),
-                    // }
 
                     *counter += 1;
 
@@ -566,23 +577,32 @@ impl App {
                     }
                 }
                 ServerEntry::Object(server_object) => {
-                    let line = match (*counter == self.selected_server, *counter == attached) {
-                        (true, attached) => {
-                            match attached {
-                                true => spans.extend(["● ".green(), server_object.name.to_span()]),
-                                false => spans.push(server_object.name.to_span().bold()),
-                            };
+                    spans.extend(if *counter == attached {
+                        [
+                            self.ti_cfg()
+                                .server_online_symbol
+                                .as_str()
+                                .fg(self.ti_cfg().server_online_color),
+                            server_object.name.to_span(),
+                        ]
+                    } else {
+                        // [" ".to_span(), server_object.name.to_span()]
+                        [
+                            // highly intrusive: 252, 186, 3
+                            // less intrusive: 222, 186, 30
+                            // quite intrusive stil but: 222, 156, 50
+                            self.ti_cfg()
+                                .server_offline_symbol
+                                .as_str()
+                                .fg(self.ti_cfg().server_offline_color),
+                            server_object.name.to_span(),
+                        ]
+                    });
 
-                            Line::from(spans).bg(Color::Blue)
-                        }
-
-                        (false, attached) => {
-                            match attached {
-                                true => spans.extend([' '.to_span(), '●'.green()]),
-                                false => spans.push(server_object.name.to_span()),
-                            }
-                            Line::from(spans)
-                        }
+                    let line = if *counter == self.selected_server {
+                        Line::from(spans).bg(self.ti_cfg().selected_color)
+                    } else {
+                        Line::from(spans)
                     };
 
                     accumulator.push(line);
@@ -618,15 +638,7 @@ impl App {
     }
 
     fn render(&self, frame: &mut Frame) {
-        // Hella dark:
-        // 26, 27, 38
-        //
-        // 30, 31, 42
-        //
-        // Very light, neutral, middle ground, valid color
-        // 46, 52, 64
-
-        if let Some(background_color) = self.config.terminal_interface_config.background_color {
+        if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
 
             frame.render_widget(background_block, frame.area());
@@ -636,7 +648,7 @@ impl App {
             input,
             output,
             state,
-            blink,
+            blinking,
             ..
         } = &self.mode
         else {
@@ -644,6 +656,8 @@ impl App {
             frame.render_widget(self.draw_servers_list_widget(area.height), area);
             return;
         };
+
+        // TODO: use a fucking terminal thing
 
         let output_area = if matches!(state, ServerState::Escaping) {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
@@ -705,7 +719,7 @@ impl App {
                 acc
             });
 
-        if !*blink {
+        if !*blinking {
             output_lines.push(Line::from(last_line));
         } else if current_line_utf8_length + 1 >= output_text_width {
             output_lines.push(Line::from(last_line));
@@ -714,44 +728,6 @@ impl App {
             last_line.push('█');
             output_lines.push(Line::from(last_line));
         }
-
-        // for line in output
-        //     .iter()
-        //     // use skip here to get the maximum number of lines that might need to be used
-        //     // Then, the lines that aren't used will simply not be rendered
-        //     .skip(output.len().saturating_sub(output_lines_available))
-        //     .chain(iter::once(&format!("\n{input}")))
-        // {
-        //     for ch in line.chars() {
-        //         if ch == '\n' {
-        //             output_lines.push(Line::from(mem::take(&mut current_line)));
-        //             current_line_utf8_length = 0;
-        //             continue;
-        //         } else if ch == '\r' {
-        //             continue;
-        //         }
-        //
-        //         let ch_length = ch.len_utf8();
-        //
-        //         if current_line_utf8_length + ch_length > output_text_width {
-        //             output_lines.push(Line::from(mem::replace(&mut current_line, ch.to_string())));
-        //             current_line_utf8_length = ch.len_utf8();
-        //         } else {
-        //             current_line.push(ch);
-        //             current_line_utf8_length += ch_length;
-        //         }
-        //     }
-        // }
-
-        // if *blink {
-        //     if current_line_utf8_length + 1 < output_text_width
-        //         && let Some(last_line) = output_lines.last_mut()
-        //     {
-        //         last_line.push_span('█'.to_span());
-        //     } else {
-        //         output_lines.push('█'.to_line());
-        //     }
-        // }
 
         let line_count = output_lines.len();
 
