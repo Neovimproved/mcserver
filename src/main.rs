@@ -1,4 +1,3 @@
-#![allow(unused)]
 use std::fs::{self, File};
 
 use clap::Parser;
