@@ -2,7 +2,7 @@ use std::{
     fmt::Debug,
     future::{Pending, pending},
     io::IsTerminal,
-    mem,
+    iter, mem,
     pin::Pin,
 };
 
@@ -14,8 +14,8 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
     style::{Color, Style, Stylize},
-    text::{Line, Span, ToSpan},
-    widgets::{Block, Borders, List, Paragraph, Wrap},
+    text::{Line, Span, ToLine, ToSpan},
+    widgets::{Block, Borders, List},
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -61,7 +61,7 @@ impl Mode {
             input: String::new(),
             output: LineBuffer::new(),
             state: ServerState::Normal,
-            blink: false,
+            blink: true,
         }
     }
 }
@@ -78,13 +78,25 @@ pub struct App {
 }
 
 #[macro_export]
-macro_rules! stderr_log {
+macro_rules! log {
     ($($arg:tt)*) => {{
         #[cfg(debug_assertions)]
         if !std::io::stderr().is_terminal() {
             eprintln!($($arg)*);
         }
     }};
+}
+
+#[macro_export]
+macro_rules! log_bytes {
+    ($bytes:expr) => {
+        #[cfg(debug_assertions)]
+        io::stderr()
+            .write_all(&$bytes)
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to write to stderr")?;
+    };
 }
 
 fn readable_pretty(object: impl Debug) -> String {
@@ -114,7 +126,7 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to create/read config")?;
 
-        stderr_log!("Pretty config: {config:#?}");
+        log!("Pretty config: {config:#?}");
 
         let servers = servers::read(config.servers_directory.as_ref()).await?;
 
@@ -178,7 +190,7 @@ impl App {
         }
 
         let Some(name) = name else {
-            stderr_log!("{counter}");
+            log!("{counter}");
             return Ok(());
         };
 
@@ -226,8 +238,8 @@ impl App {
                         .wrap_err("Failed to make synchronization request")?,
 
                     'u' => {
-                        stderr_log!("{}", readable_pretty(&self.servers));
-                        stderr_log!("Position: {}", self.selected_server);
+                        log!("{}", readable_pretty(&self.servers));
+                        log!("Position: {}", self.selected_server);
                     }
 
                     _ => {}
@@ -352,7 +364,7 @@ impl App {
             Ok(length) => length,
             Err(err) => match err.kind() {
                 io::ErrorKind::UnexpectedEof => {
-                    stderr_log!("Server closed");
+                    log!("Server closed");
                     return Err(err)
                         .into_diagnostic()
                         .wrap_err("Server connection severed");
@@ -366,8 +378,8 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to receive message from server")?
         {
-            ServerMessage::KillFailure(err) => stderr_log!("Failed to kill child: {err}"),
-            ServerMessage::KillSuccess => stderr_log!("Successfully killed the child process"),
+            ServerMessage::KillFailure(err) => log!("Failed to kill child: {err}"),
+            ServerMessage::KillSuccess => log!("Successfully killed the child process"),
             ServerMessage::Closed => {
                 if let Mode::Console { input, state, .. } = &mut self.mode {
                     *input = "Press enter to return...".to_string();
@@ -375,20 +387,42 @@ impl App {
                 }
             }
             ServerMessage::Message(message) => {
-                stderr_log!("Received a message from the server: {message}");
+                log!("Received a message from the server: {message}");
             }
             ServerMessage::AlreadyStarted => {
-                stderr_log!("The server has already started apparently");
+                log!("The server has already started apparently");
             }
             ServerMessage::NotAttached => {
-                stderr_log!("The server has not yet started apparently");
+                log!("The server has not yet started apparently");
             }
             ServerMessage::Output(bytes) => {
                 if let Mode::Console { output, .. } = &mut self.mode {
+                    let mut log_message = Vec::from(b"Message: ");
+
+                    for b in bytes.iter() {
+                        match *b {
+                            b'\n' => log_message.extend_from_slice(b"\\n"),
+                            b'\r' => log_message.extend_from_slice(b"\\r"),
+                            _ => log_message.push(*b),
+                        }
+                    }
+
+                    log_message.push(10);
+
+                    log_bytes!(log_message);
+
                     output.push(display_bytes(&bytes).to_string());
                 }
             }
             ServerMessage::History(history) => {
+                log!(
+                    "Received history: {}",
+                    history
+                        .iter()
+                        .map(|line| String::from_utf8_lossy(line))
+                        .collect::<Vec::<_>>()
+                        .join("\n")
+                );
                 if let Mode::Console { output, .. } = &mut self.mode {
                     history
                         .into_iter()
@@ -428,7 +462,6 @@ impl App {
             }
 
             if redraw {
-                stderr_log!("Redrawing");
                 terminal
                     .draw(|frame| self.render(frame))
                     .into_diagnostic()
@@ -616,7 +649,7 @@ impl App {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                 .split(frame.area());
 
-            stderr_log!("Hello");
+            log!("Hello");
 
             frame.render_widget(
                 self.draw_servers_list_widget(main_sections[0].height),
@@ -639,32 +672,95 @@ impl App {
         // man
         // yesman
 
-        let mut output_text = output
+        let mut output_lines = vec![];
+        let mut current_line_utf8_length = 0;
+
+        let mut last_line = output
             .iter()
             // use skip here to get the maximum number of lines that might need to be used
             // Then, the lines that aren't used will simply not be rendered
             .skip(output.len().saturating_sub(output_lines_available))
+            .chain(iter::once(input))
             .fold(String::new(), |mut acc, item| {
-                acc.push_str(item);
-                // acc.push('\n');
+                for ch in item.chars() {
+                    if ch == '\n' {
+                        output_lines.push(Line::from(acc));
+                        acc = String::new();
+                        current_line_utf8_length = 0;
+                        continue;
+                    }
+
+                    let new_length = current_line_utf8_length + ch.len_utf8();
+
+                    if new_length > output_text_width {
+                        output_lines.push(Line::from(acc));
+                        acc = ch.to_string();
+                        current_line_utf8_length = 0;
+                    } else {
+                        acc.push(ch);
+                        current_line_utf8_length = new_length;
+                    }
+                }
+
                 acc
             });
 
-        output_text.push_str(input);
-
-        if *blink {
-            output_text.push('█');
+        if !*blink {
+            output_lines.push(Line::from(last_line));
+        } else if current_line_utf8_length + 1 >= output_text_width {
+            output_lines.push(Line::from(last_line));
+            output_lines.push('█'.to_line());
+        } else {
+            last_line.push('█');
+            output_lines.push(Line::from(last_line));
         }
 
-        let lines = output_text
-            .split('\n')
-            .flat_map(|line| textwrap::wrap(line, output_text_width))
-            .count();
+        // for line in output
+        //     .iter()
+        //     // use skip here to get the maximum number of lines that might need to be used
+        //     // Then, the lines that aren't used will simply not be rendered
+        //     .skip(output.len().saturating_sub(output_lines_available))
+        //     .chain(iter::once(&format!("\n{input}")))
+        // {
+        //     for ch in line.chars() {
+        //         if ch == '\n' {
+        //             output_lines.push(Line::from(mem::take(&mut current_line)));
+        //             current_line_utf8_length = 0;
+        //             continue;
+        //         } else if ch == '\r' {
+        //             continue;
+        //         }
+        //
+        //         let ch_length = ch.len_utf8();
+        //
+        //         if current_line_utf8_length + ch_length > output_text_width {
+        //             output_lines.push(Line::from(mem::replace(&mut current_line, ch.to_string())));
+        //             current_line_utf8_length = ch.len_utf8();
+        //         } else {
+        //             current_line.push(ch);
+        //             current_line_utf8_length += ch_length;
+        //         }
+        //     }
+        // }
 
-        let output_widget = Paragraph::new(output_text)
-            .block(Block::new().title("Console").borders(Borders::ALL))
-            .wrap(Wrap { trim: false })
-            .scroll((lines.saturating_sub(output_lines_available) as u16, 0));
+        // if *blink {
+        //     if current_line_utf8_length + 1 < output_text_width
+        //         && let Some(last_line) = output_lines.last_mut()
+        //     {
+        //         last_line.push_span('█'.to_span());
+        //     } else {
+        //         output_lines.push('█'.to_line());
+        //     }
+        // }
+
+        let line_count = output_lines.len();
+
+        let output_widget = List::new(
+            output_lines
+                .into_iter()
+                .skip(line_count.saturating_sub(output_lines_available)),
+        )
+        .block(Block::new().title("Console").borders(Borders::ALL));
 
         frame.render_widget(output_widget, output_area);
     }
@@ -678,7 +774,7 @@ impl App {
         self.selected_server = self.selected_server.saturating_sub(1);
 
         if old != self.selected_server {
-            stderr_log!("New: {}", self.selected_server);
+            // log!("New: {}", self.selected_server);
         }
     }
 
@@ -707,7 +803,7 @@ impl App {
         self.selected_server = usize::min(self.selected_server + 1, length.saturating_sub(1));
 
         if old != self.selected_server {
-            stderr_log!("New: {}", self.selected_server);
+            log!("New: {}", self.selected_server);
         }
     }
 

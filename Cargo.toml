@@ -25,7 +25,6 @@ miette = { version = "7.6.0", features = ["fancy"] }
 pty-process = { version = "0.5.3", features = ["async"] }
 ratatui = "0.30.2"
 shellexpand = "3.1.2"
-textwrap = "0.16.4"
 tokio = { version = "1.53.1", features = ["full"] }
 
 [[bin]]
