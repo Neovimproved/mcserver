@@ -168,6 +168,7 @@ async fn server_lifecycle(
 enum ServeAction {
     Prompt,
     Attach(String),
+    Disconnect,
 }
 
 async fn initialize_server(
@@ -210,6 +211,131 @@ async fn initialize_server(
     ))
 }
 
+async fn prompt_client(
+    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+    _config: &'static Config,
+    _server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> Result<ServeAction> {
+    Ok(loop {
+        let message: ClientMessage = match read_message!(reader).await {
+            Ok(message) => message,
+            Err(crate::error::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                println!("Most graceful client disconnect");
+                break ServeAction::Disconnect;
+            }
+            Err(err) => return Err(err).wrap_err("Erroneous client disconnect"),
+        };
+
+        match message {
+            ClientMessage::Attach { name } => break ServeAction::Attach(name),
+            _ => {
+                write_message!(writer, ServerMessage::NotAttached).await?;
+                println!("Not attached but received {message}!");
+            }
+        };
+    })
+}
+
+async fn handle_client_message(
+    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+    message_sender: &UnboundedSender<ClientMessage>,
+    size: usize,
+) -> Result<Option<ServeAction>> {
+    if size > MAX_MESSAGE_LENGTH {
+        eprintln!(
+            "The client is being very disingenuous right now!! I'm going to have to break up with them unfortunately"
+        );
+        return Err(eyre!("Disingenuous client"));
+    }
+
+    let message: ClientMessage = read_message!(reader, size).await?;
+
+    match message {
+        ClientMessage::Attach { name } => Ok(Some(ServeAction::Attach(name))),
+        ClientMessage::Detach => Ok(Some(ServeAction::Prompt)),
+        ClientMessage::Kill | ClientMessage::ProgramInput(..) => {
+            message_sender.send(message)?;
+            Ok(None)
+        }
+        ClientMessage::SynchronizationRequest => {
+            let payload = SynchronizationPayload {
+                online_servers: server_communicators
+                    .iter()
+                    .map(|pair| pair.key().clone())
+                    .collect(),
+            };
+
+            write_message!(writer, ServerMessage::SynchronizationPayload(payload))
+                .await
+                .wrap_err("Failed to send synchronization paylaod to client")?;
+
+            Ok(None)
+        }
+    }
+}
+
+async fn attach_client(
+    name: String,
+    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
+    config: &'static Config,
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> Result<ServeAction> {
+    let (message_sender, requets_sender, mut receiver) = match server_communicators.get(&name) {
+        Some(com) => (
+            com.client_message_sender.clone(),
+            com.client_request_sender.clone(),
+            com.server_message_sender.subscribe(),
+        ),
+        None => initialize_server(config, name, server_communicators).await?,
+    };
+
+    let (tx, rx) = oneshot::channel();
+
+    requets_sender.send(Request::GetHistory(tx))?;
+
+    let history = rx.await.unwrap_or_else(|err| {
+        LineBuffer::from(vec![
+            format!("Falied to produce history: {err:?}\n").into_bytes(),
+        ])
+    });
+
+    write_message!(writer, ServerMessage::History(history)).await?;
+
+    Ok(loop {
+        select! {
+            res = receiver.recv() => {
+                let message = match res {
+                    Ok(message) => message,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        write_message!(writer, ServerMessage::Closed).await?;
+                        break ServeAction::Prompt;
+                    },
+                    Err(broadcast::error::RecvError::Lagged(messages)) => {
+                        eprintln!("Missed {messages} messages");
+                        continue;
+                    },
+                };
+
+                write_bytes!(writer, message).await?;
+            }
+
+            res = reader.read_u32() => {
+                let size = match res {
+                    Ok(n) => n as usize,
+                    Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                        println!("Graceful disconnect!!");
+                        return Ok(ServeAction::Disconnect);
+                    }
+                    Err(err) => return Err(err).wrap_err("Failed to read message size"),
+                };
+
+                handle_client_message((&mut reader, &mut writer), server_communicators, &message_sender, size).await?;
+            }
+        }
+    })
+}
+
 async fn serve_client(
     (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
     config: &'static Config,
@@ -221,98 +347,21 @@ async fn serve_client(
     loop {
         match action {
             ServeAction::Prompt => {
-                let name = &loop {
-                    let message: ClientMessage = match read_message!(reader).await {
-                        Ok(message) => message,
-                        Err(crate::error::Error::Io(err))
-                            if err.kind() == io::ErrorKind::UnexpectedEof =>
-                        {
-                            println!("Most graceful client disconnect");
-                            return Ok(());
-                        }
-                        Err(err) => return Err(err).wrap_err("Erroneous client disconnect"),
-                    };
-
-                    match message {
-                        ClientMessage::Attach { name } => break name,
-                        _ => {
-                            write_message!(writer, ServerMessage::NotAttached).await?;
-                            println!("Not attached but received {message}!");
-                        }
-                    };
-                };
-
-                action = ServeAction::Attach(name.to_owned());
+                action =
+                    prompt_client((&mut reader, &mut writer), config, server_communicators).await?;
             }
 
             ServeAction::Attach(name) => {
-                let (message_sender, requets_sender, mut receiver) =
-                    match server_communicators.get(&name) {
-                        Some(com) => (
-                            com.client_message_sender.clone(),
-                            com.client_request_sender.clone(),
-                            com.server_message_sender.subscribe(),
-                        ),
-                        None => initialize_server(config, name, server_communicators).await?,
-                    };
-
-                let (tx, rx) = oneshot::channel();
-
-                requets_sender.send(Request::GetHistory(tx))?;
-
-                let history = rx.await.unwrap_or_else(|err| {
-                    LineBuffer::from(vec![
-                        format!("Falied to produce history: {err:?}\n").into_bytes(),
-                    ])
-                });
-
-                write_message!(writer, ServerMessage::History(history)).await?;
-
-                action = loop {
-                    select! {
-                        res = receiver.recv() => {
-                            let message = match res {
-                                Ok(message) => message,
-                                Err(broadcast::error::RecvError::Closed) => {
-                                    write_message!(writer, ServerMessage::Closed).await?;
-                                    break ServeAction::Prompt;
-                                },
-                                Err(broadcast::error::RecvError::Lagged(messages)) => {
-                                    eprintln!("Missed {messages} messages");
-                                    continue;
-                                },
-                            };
-
-                            write_bytes!(writer, message).await?;
-                        }
-
-                        res = reader.read_u32() => {
-                            let size = match res {
-                                Ok(n) => n as usize,
-                                Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                                    println!("Graceful disconnect!!");
-                                    return Ok(());
-                                }
-                                Err(err) => return Err(err).wrap_err("Failed to read message size"),
-                            };
-
-                            if size > MAX_MESSAGE_LENGTH {
-                                eprintln!("The client is being very disingenuous right now!! I'm going to have to break up with them unfortunately");
-                                return Err(eyre!("Disingenuous client"));
-                            }
-
-                            let message: ClientMessage = read_message!(reader, size).await?;
-
-                            match message {
-                                ClientMessage::Attach { name } => break ServeAction::Attach(name),
-                                ClientMessage::Detach => break ServeAction::Prompt,
-                                ClientMessage::Kill | ClientMessage::ProgramInput(..) => message_sender.send(message)?,
-                                ClientMessage::SynchronizeServers => todo!(),
-                            }
-                        }
-                    }
-                }
+                action = attach_client(
+                    name,
+                    (&mut reader, &mut writer),
+                    config,
+                    server_communicators,
+                )
+                .await?
             }
+
+            ServeAction::Disconnect => break Ok(()),
         }
     }
 }
