@@ -338,7 +338,6 @@ async fn serve_client(
     config: &'static Config,
     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<()> {
-    #[allow(unreachable_code)]
     let mut action = ServeAction::Prompt;
 
     loop {
