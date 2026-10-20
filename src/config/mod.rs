@@ -226,6 +226,68 @@ mod test {
 
     use super::*;
 
+    enum Last {
+        Backslash,
+        Unicode(String),
+        Normal,
+    }
+
+    fn parse_kdl_str(s: &str) -> String {
+        let mut last = Last::Normal;
+
+        s.chars()
+            .enumerate()
+            .fold(String::with_capacity(s.len() / 2), |mut acc, (idx, ch)| {
+                if (idx == 0 || idx == s.len() - 1) && ch == '"' {
+                    return acc;
+                }
+
+                match &mut last {
+                    Last::Backslash => {
+                        match ch {
+                            'n' => acc.push('\n'),
+                            'r' => acc.push('\r'),
+                            't' => acc.push('\t'),
+                            '\\' => acc.push('\\'),
+                            '"' => acc.push('"'),
+                            // backspace
+                            'b' => acc.push('\x08'),
+                            'f' => acc.push('\x0C'),
+                            's' => acc.push(' '),
+                            'u' => {
+                                last = Last::Unicode("".to_string());
+                                return acc;
+                            }
+                            _ => unreachable!("Invalid escape seq"),
+                        }
+                        last = Last::Normal;
+                    }
+                    Last::Unicode(s) => match ch {
+                        '{' => {}
+                        '0'..='9' => s.push(ch),
+                        'a'..='f' | 'A'..='F' => s.push(ch),
+                        '}' => {
+                            acc.push(
+                                char::from_u32(
+                                    u32::from_str_radix(s, 16).expect("Failed to parse"),
+                                )
+                                .expect("Invalid utf-8 char"),
+                            );
+                            last = Last::Normal;
+                        }
+                        _ => unreachable!("Idiot failed at push kdl string"),
+                    },
+                    Last::Normal => match ch {
+                        '\\' => {
+                            last = Last::Backslash;
+                        }
+                        _ => acc.push(ch),
+                    },
+                }
+                acc
+            })
+    }
+
     #[tokio::test]
     async fn test_read_file() -> miette::Result<()> {
         let dir = tempdir_init()?;
@@ -233,33 +295,43 @@ mod test {
         let config_path = dir.path().join(CONFIG_FILE_NAME);
 
         let java_args = [
-            "-Xms1G",
-            "-Xmx2G",
-            "-XX:+UseG1GC",
-            "-XX:+ParallelRefProcEnabled",
-            "-XX:MaxGCPauseMillis=200",
-            "-XX:+DisableExplicitGC",
+            "\"-Xms1G\"",
+            "\"-Xmx2G\"",
+            "\"-XX:+UseG1GC\"",
+            "\"-XX:+ParallelRefProcEnabled\"",
+            "\"-XX:MaxGCPauseMillis=200\"",
+            "\"-XX:+DisableExplicitGC\"",
         ];
 
+        let expected_java_args: Vec<_> = java_args.map(parse_kdl_str).into_iter().collect();
+
         let java_args_string = java_args.iter().fold(String::from('\n'), |mut acc, item| {
-            acc.push_str("    \"");
+            acc.push_str("    ");
             acc.push_str(item);
-            acc.push_str("\"\n");
+            acc.push('\n');
             acc
         });
 
         // to test tilde and env expansion
         let servers_directory = "~/$HOME/bum_cheeks";
 
-        // TODO: convert the test cases by removing the backslashes, leading and trailing quotations etc. in comparison rhs (removed for now)
-
         let aliases = HashMap::from([
             ("default", "hi"),
             ("~^file.nix", "file.nix"),
             ("-%po1a+!:-o.bum", "poo.bum"),
-            ("poop%", "hi"),
-            ("poop", "ksib"),
+            ("\"p\\noop%\"", "hi"),
+            ("\"\"", "a"),
+            ("\"\\u{1024}\"", "b"),
+            ("\"pooop%\"", "hi"),
+            ("hi", "bye"),
+            ("hii", "byee"),
+            ("hiiii", "byeeee"),
         ]);
+
+        let expected_aliases: HashMap<_, _> = aliases
+            .iter()
+            .map(|(k, v)| (parse_kdl_str(k), parse_kdl_str(v)))
+            .collect();
 
         let aliases_string = aliases.iter().fold(String::from('\n'), |mut acc, item| {
             acc.push_str("    ");
@@ -269,19 +341,6 @@ mod test {
             acc.push('\n');
             acc
         });
-
-        // let terminal_interface = TerminalInterfaceConfig {
-        //     cursor_blink: todo!(),
-        //     background_color: todo!(),
-        //     selected_color: todo!(),
-        //     group_symbol_color: todo!(),
-        //     group_folded_symbol: todo!(),
-        //     group_expanded_symbol: todo!(),
-        //     server_offline_color: todo!(),
-        //     server_online_color: todo!(),
-        //     server_offline_symbol: todo!(),
-        //     server_online_symbol: todo!(),
-        // };
 
         let config_string = format!(
             r#"
@@ -305,7 +364,7 @@ terminal-interface {{
             java_args_string, aliases_string
         );
 
-        fs::write(&config_path, config_string)
+        fs::write(&config_path, &config_string)
             .await
             .into_diagnostic()
             .wrap_err_with(|| format!("Failed to write to config file `{config_path:?}`"))?;
@@ -313,20 +372,13 @@ terminal-interface {{
         let (config, _) = read_file(&config_path)
             .await
             .into_diagnostic()
-            .wrap_err("Failed to read config")?;
+            .wrap_err_with(|| format!("Failed to read config:\n{}", config_string))?;
 
-        assert_eq!(&config.default_java_args, &java_args);
+        assert_eq!(&config.default_java_args, &expected_java_args);
 
         assert_eq!(&config.servers_directory.value, servers_directory);
 
-        assert_eq!(
-            config
-                .aliases
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect::<HashMap<&str, &str>>(),
-            aliases
-        );
+        assert_eq!(&config.aliases, &expected_aliases);
 
         Ok(())
     }
