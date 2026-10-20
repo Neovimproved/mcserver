@@ -848,7 +848,7 @@ impl App {
             return;
         }
 
-        if new_scroll + self.last_area.height.saturating_sub(2) > self.server_list.selected {
+        if new_scroll > self.server_list.selected {
             self.server_list.selected = (list_length - 1).min(self.server_list.selected + 1);
         }
 
