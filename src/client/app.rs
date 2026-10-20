@@ -12,7 +12,7 @@ use kdl::KdlDocument;
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
     text::{Line, Span, ToLine, ToSpan},
     widgets::{Block, Borders, List},
@@ -66,14 +66,33 @@ impl Mode {
     }
 }
 
+struct ServerList {
+    servers: Vec<ServerEntry>,
+    selected: usize,
+    scroll: usize,
+}
+
+struct Area {
+    width: usize,
+    height: usize,
+}
+
+impl From<Rect> for Area {
+    fn from(Rect { width, height, .. }: Rect) -> Self {
+        Self {
+            width: width as usize,
+            height: height as usize,
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub struct App {
     config: Config,
     mode: Mode,
     document: Option<KdlDocument>,
-    servers: Vec<ServerEntry>,
-    server_scroll: usize,
-    selected_server: usize,
+    server_list: ServerList,
+    last_area: Area,
     exiting: bool,
 }
 
@@ -135,9 +154,16 @@ impl App {
         Ok(Self {
             config,
             document,
-            servers,
-            selected_server: 0usize,
-            server_scroll: 0usize,
+            server_list: ServerList {
+                servers,
+                selected: 0usize,
+                scroll: 0usize,
+            },
+            // standard terminal area or something like that 🤷‍♂️
+            last_area: Area {
+                width: 80,
+                height: 24,
+            },
             mode: Mode::Selecting,
             exiting: false,
         })
@@ -152,14 +178,14 @@ impl App {
         let mut counter = 0;
         let mut name: Option<String> = None;
 
-        let mut iterators = vec![self.servers.iter_mut()];
+        let mut iterators = vec![self.server_list.servers.iter_mut()];
         let mut qualifier: Vec<&str> = vec![];
 
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
 
             for entry in back_iter {
-                if self.selected_server == counter {
+                if self.server_list.selected == counter {
                     match entry {
                         ServerEntry::Group(server_group) => {
                             server_group.expanded = !server_group.expanded;
@@ -202,7 +228,7 @@ impl App {
 
         write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
 
-        self.mode = Mode::output(self.selected_server, name);
+        self.mode = Mode::output(self.server_list.selected, name);
 
         Ok(())
     }
@@ -224,7 +250,15 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                 KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
-                KeyCode::Char('g') => self.selected_server = 0,
+                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_down();
+                }
+
+                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.scroll_up();
+                }
+
+                KeyCode::Char('g') => self.server_list.selected = 0,
                 KeyCode::Char('G') => self.selection_bottom(),
 
                 // TODO: these should actually by different from left and right
@@ -244,8 +278,8 @@ impl App {
                         .wrap_err("Failed to make synchronization request")?,
 
                     'u' => {
-                        log!("{}", readable_pretty(&self.servers));
-                        log!("Position: {}", self.selected_server);
+                        log!("{}", readable_pretty(&self.server_list.servers));
+                        log!("Position: {}", self.server_list.selected);
                     }
 
                     _ => {}
@@ -476,7 +510,7 @@ impl App {
 
             if redraw {
                 terminal
-                    .draw(|frame| self.render(frame))
+                    .draw(|frame| self.last_area = self.render(frame))
                     .into_diagnostic()
                     .wrap_err("Failed to render tui")?;
             }
@@ -521,7 +555,7 @@ impl App {
         self.run(terminal, (reader, writer)).await
     }
 
-    fn display_entries<'a>(
+    fn draw_entries<'a>(
         &'a self,
         entries: &'a [ServerEntry],
         accumulator: &mut Vec<Line<'a>>,
@@ -556,7 +590,7 @@ impl App {
                         ]);
                     };
 
-                    let line = if *counter == self.selected_server {
+                    let line = if *counter == self.server_list.selected {
                         Line::from(spans).bg(self.ti_cfg().selected_color)
                     } else {
                         Line::from(spans)
@@ -567,7 +601,7 @@ impl App {
                     *counter += 1;
 
                     if server_group.expanded {
-                        self.display_entries(
+                        self.draw_entries(
                             &server_group.children,
                             accumulator,
                             &format!("{base_indentation}│   "),
@@ -599,7 +633,7 @@ impl App {
                         ]
                     });
 
-                    let line = if *counter == self.selected_server {
+                    let line = if *counter == self.server_list.selected {
                         Line::from(spans).bg(self.ti_cfg().selected_color)
                     } else {
                         Line::from(spans)
@@ -613,13 +647,13 @@ impl App {
         }
     }
 
-    fn draw_servers_list_widget(&self, _height_available: u16) -> List<'_> {
+    fn draw_servers_list_widget(&self, height_available: u16) -> List<'_> {
         let mut counter = 0;
 
         let mut lines = vec![];
 
-        self.display_entries(
-            &self.servers,
+        self.draw_entries(
+            &self.server_list.servers,
             &mut lines,
             "",
             &mut counter,
@@ -631,13 +665,15 @@ impl App {
             },
         );
 
-        let _length = lines.len();
+        // 2 because of the top and bottom border
+        // Extra 1 to make it representative of an index
 
         // TODO: use this
-        List::new(lines).block(Block::new().title("Servers").borders(Borders::ALL))
+        List::new(lines.into_iter().skip(self.server_list.scroll))
+            .block(Block::new().title("Servers").borders(Borders::ALL))
     }
 
-    fn render(&self, frame: &mut Frame) {
+    fn render(&self, frame: &mut Frame) -> Area {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
 
@@ -654,7 +690,7 @@ impl App {
         else {
             let area = frame.area();
             frame.render_widget(self.draw_servers_list_widget(area.height), area);
-            return;
+            return area.into();
         };
 
         // TODO: use a fucking terminal thing
@@ -731,6 +767,7 @@ impl App {
         .block(Block::new().title("Console").borders(Borders::ALL));
 
         frame.render_widget(output_widget, output_area);
+        frame.area().into()
     }
 
     fn selection_mode(&mut self) {
@@ -738,11 +775,10 @@ impl App {
     }
 
     fn selection_up(&mut self) {
-        let old = self.selected_server;
-        self.selected_server = self.selected_server.saturating_sub(1);
+        self.server_list.selected = self.server_list.selected.saturating_sub(1);
 
-        if old != self.selected_server {
-            // log!("New: {}", self.selected_server);
+        if self.server_list.scroll > self.server_list.selected {
+            self.server_list.scroll = self.server_list.selected;
         }
     }
 
@@ -766,17 +802,58 @@ impl App {
     }
 
     fn selection_down(&mut self) {
-        let old = self.selected_server;
-        let length = Self::count_len(&self.servers);
-        self.selected_server = usize::min(self.selected_server + 1, length.saturating_sub(1));
+        let length = Self::count_len(&self.server_list.servers);
 
-        if old != self.selected_server {
-            log!("New: {}", self.selected_server);
+        self.server_list.selected =
+            usize::min(self.server_list.selected + 1, length.saturating_sub(1));
+
+        let height_index = self.last_area.height.saturating_sub(3);
+        let last_visible = self.server_list.scroll + height_index;
+
+        if self.server_list.selected > last_visible {
+            self.server_list.scroll = self.server_list.selected - height_index;
         }
     }
 
     fn selection_bottom(&mut self) {
-        self.selected_server = Self::count_len(&self.servers).saturating_sub(1);
+        self.server_list.selected = Self::count_len(&self.server_list.servers).saturating_sub(1);
+    }
+
+    fn scroll_up(&mut self) {
+        if self.server_list.scroll == 0 {
+            return;
+        }
+
+        self.server_list.scroll -= 1;
+
+        let last_visible = self.server_list.scroll + self.last_area.height.saturating_sub(3);
+
+        if self.server_list.selected >= last_visible {
+            self.server_list.selected = last_visible;
+        }
+
+        log!(
+            "Scroll: {}\nHeight-1: {}\nLast visible: {}",
+            self.server_list.scroll,
+            self.last_area.height.saturating_sub(1),
+            last_visible
+        );
+    }
+
+    fn scroll_down(&mut self) {
+        let new_scroll = self.server_list.scroll + 1;
+
+        let list_length = Self::count_len(&self.server_list.servers);
+
+        if new_scroll >= list_length {
+            return;
+        }
+
+        if new_scroll + self.last_area.height.saturating_sub(2) > self.server_list.selected {
+            self.server_list.selected = (list_length - 1).min(self.server_list.selected + 1);
+        }
+
+        self.server_list.scroll = new_scroll;
     }
 
     pub fn exit(&mut self) {
