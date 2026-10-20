@@ -522,12 +522,18 @@ impl App {
                         bail!("Failed to read from terminal");
                     };
 
-                    let Event::Key(key) = event.into_diagnostic().wrap_err("Failed to read key input")? else {
-                        // only care about those keys!!
-                        continue;
+                    match event.into_diagnostic().wrap_err("Failed to read key input")? {
+                        Event::Key(key) => self.handle_keycode(key, &mut writer).await?,
+                        Event::Resize(_columns, rows) => {
+                            let last_visible = self.server_list.scroll + rows.saturating_sub(3) as usize;
+                            if self.server_list.selected > last_visible {
+                                self.server_list.selected = last_visible;
+                            } else {
+                                continue;
+                            }
+                        },
+                        _ => continue,
                     };
-
-                    self.handle_keycode(key, &mut writer).await?;
                     true
                 }
 
