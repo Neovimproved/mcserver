@@ -40,10 +40,12 @@ pub struct SynchronizationPayload {
     pub online_servers: HashSet<String>,
 }
 
-// TODO: use this instead of forwarding server messages
 #[derive(Debug)]
-#[allow(dead_code)]
-pub enum ServerInstruction {}
+pub enum ServerInstruction {
+    Kill,
+
+    SendInput(Vec<u8>),
+}
 
 #[derive(Clone, Debug, Decode, Display, Encode)]
 pub enum ServerMessage {

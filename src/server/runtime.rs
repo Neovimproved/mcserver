@@ -23,7 +23,7 @@ use crate::{
     config::{self, Config},
     consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
     line_buffer::LineBuffer,
-    messages::{ClientMessage, ServerMessage, SynchronizationPayload},
+    messages::{ClientMessage, ServerInstruction, ServerMessage, SynchronizationPayload},
     metadata, read_message,
     server::types::{Request, ServerCommunicator},
     write_bytes, write_message,
@@ -53,7 +53,7 @@ async fn spawn_server_process(
 async fn start_server(
     config: &'static Config,
     name: &str,
-    mut message_receiver: UnboundedReceiver<ClientMessage>,
+    mut message_receiver: UnboundedReceiver<ServerInstruction>,
     mut request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<Vec<u8>>,
 ) -> Result<()> {
@@ -98,13 +98,7 @@ async fn start_server(
                 };
 
                 match message {
-                    ClientMessage::Attach { name } => {
-                        eprintln!("Tried attaching to {name} (does not work here)");
-                    },
-                    ClientMessage::Detach => {
-                        eprintln!("Tried detaching (does not work here)");
-                    },
-                    ClientMessage::Kill => {
+                    ServerInstruction::Kill => {
                         match child.kill().await {
                             Ok(()) => {
                                 sender.send(bitcode::encode(&ServerMessage::KillSuccess))?;
@@ -116,12 +110,11 @@ async fn start_server(
                             }
                         };
                     }
-                    ClientMessage::ProgramInput(bytes) => {
+                    ServerInstruction::SendInput(bytes) => {
                         history.push(bytes.clone());
                         pty.write_all(&bytes).await?;
                         pty.flush().await.wrap_err("Failed to flush")?;
                     }
-                    _ => {}
                 }
             }
 
@@ -143,7 +136,7 @@ async fn start_server(
 async fn server_lifecycle(
     config: &'static Config,
     name: String,
-    message_receiver: UnboundedReceiver<ClientMessage>,
+    message_receiver: UnboundedReceiver<ServerInstruction>,
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<Vec<u8>>,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
@@ -173,11 +166,11 @@ async fn initialize_server(
     name: String,
     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<(
-    UnboundedSender<ClientMessage>,
+    UnboundedSender<ServerInstruction>,
     UnboundedSender<Request>,
     broadcast::Receiver<Vec<u8>>,
 )> {
-    let (client_message_sender, client_message_receiver) = unbounded_channel();
+    let (instruction_sender, instruction_receiver) = unbounded_channel();
 
     let (client_request_sender, client_request_receiver) = unbounded_channel();
 
@@ -186,7 +179,7 @@ async fn initialize_server(
     server_communicators.insert(
         name.clone(),
         ServerCommunicator {
-            client_message_sender: client_message_sender.clone(),
+            instruction_sender: instruction_sender.clone(),
             client_request_sender: client_request_sender.clone(),
             server_message_sender: server_message_sender.clone(),
         },
@@ -195,14 +188,14 @@ async fn initialize_server(
     tokio::spawn(server_lifecycle(
         config,
         name,
-        client_message_receiver,
+        instruction_receiver,
         client_request_receiver,
         server_message_sender.clone(),
         server_communicators.clone(),
     ));
 
     Ok((
-        client_message_sender,
+        instruction_sender,
         client_request_sender,
         server_message_receiver,
     ))
@@ -236,7 +229,7 @@ async fn prompt_client(
 async fn handle_client_message(
     (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
     server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-    message_sender: &UnboundedSender<ClientMessage>,
+    message_sender: &UnboundedSender<ServerInstruction>,
     size: usize,
 ) -> Result<Option<ServeAction>> {
     if size > MAX_MESSAGE_LENGTH {
@@ -251,8 +244,18 @@ async fn handle_client_message(
     match message {
         ClientMessage::Attach { name } => Ok(Some(ServeAction::Attach(name))),
         ClientMessage::Detach => Ok(Some(ServeAction::Prompt)),
-        ClientMessage::Kill | ClientMessage::ProgramInput(..) => {
-            message_sender.send(message)?;
+        ClientMessage::Kill => {
+            message_sender
+                .send(ServerInstruction::Kill)
+                .wrap_err("Failed to send kill instruction")?;
+
+            Ok(None)
+        }
+        ClientMessage::ProgramInput(bytes) => {
+            message_sender
+                .send(ServerInstruction::SendInput(bytes))
+                .wrap_err("Failed to send input instruction")?;
+
             Ok(None)
         }
         ClientMessage::SynchronizationRequest => {
@@ -280,7 +283,7 @@ async fn attach_client(
 ) -> Result<ServeAction> {
     let (message_sender, requets_sender, mut receiver) = match server_communicators.get(&name) {
         Some(com) => (
-            com.client_message_sender.clone(),
+            com.instruction_sender.clone(),
             com.client_request_sender.clone(),
             com.server_message_sender.subscribe(),
         ),
