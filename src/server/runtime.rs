@@ -15,18 +15,19 @@ use tokio::{
     sync::{
         broadcast,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-        oneshot,
     },
 };
 
 use crate::{
     config::{self, Config},
-    consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
+    consts::{LOCAL_TCP_ADDR, SOCKET_PATH},
     line_buffer::LineBuffer,
-    messages::{ClientMessage, ServerInstruction, ServerMessage},
-    metadata, read_message,
-    server::types::{Request, ServerCommunicator},
-    write_bytes, write_message,
+    messages::{ServerInstruction, ServerMessage},
+    metadata,
+    server::{
+        client::Client,
+        types::{Request, ServerCommunicator},
+    },
 };
 
 async fn spawn_server_process(
@@ -154,32 +155,10 @@ async fn server_lifecycle(
     res
 }
 
-enum ServeAction {
-    Prompt,
-    Attach(String),
-    Disconnect,
-}
-
-async fn send_synchronization_payload(
-    mut writer: impl AsyncWriteExt + Unpin,
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-) -> Result<()> {
-    let message = ServerMessage::SynchronizationPayload {
-        online_servers: server_communicators
-            .iter()
-            .map(|pair| pair.key().clone())
-            .collect(),
-    };
-
-    write_message!(writer, message)
-        .await
-        .wrap_err("Failed to send synchronization payload to client")
-}
-
-async fn initialize_server(
+pub async fn initialize_server(
     config: &'static Config,
     name: String,
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<(
     UnboundedSender<ServerInstruction>,
     UnboundedSender<Request>,
@@ -206,7 +185,7 @@ async fn initialize_server(
         instruction_receiver,
         client_request_receiver,
         server_message_sender.clone(),
-        server_communicators.clone(),
+        server_communicators,
     ));
 
     Ok((
@@ -214,164 +193,6 @@ async fn initialize_server(
         client_request_sender,
         server_message_receiver,
     ))
-}
-
-async fn prompt_client(
-    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-    _config: &'static Config,
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-) -> Result<ServeAction> {
-    Ok(loop {
-        let message: ClientMessage = match read_message!(reader).await {
-            Ok(message) => message,
-            Err(crate::error::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                println!("Most graceful client disconnect");
-                break ServeAction::Disconnect;
-            }
-            Err(err) => return Err(err).wrap_err("Erroneous client disconnect"),
-        };
-
-        match message {
-            ClientMessage::Attach { name } => break ServeAction::Attach(name),
-
-            ClientMessage::SynchronizationRequest => {
-                send_synchronization_payload(&mut writer, server_communicators).await?
-            }
-            _ => {
-                write_message!(writer, ServerMessage::NotAttached).await?;
-                println!("Not attached but received {message}!");
-            }
-        };
-    })
-}
-
-async fn handle_client_message(
-    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-    message_sender: &UnboundedSender<ServerInstruction>,
-    size: usize,
-) -> Result<Option<ServeAction>> {
-    if size > MAX_MESSAGE_LENGTH {
-        eprintln!(
-            "The client is being very disingenuous right now!! I'm going to have to break up with them unfortunately"
-        );
-        return Err(eyre!("Disingenuous client"));
-    }
-
-    let message: ClientMessage = read_message!(reader, size).await?;
-
-    match message {
-        ClientMessage::Attach { name } => Ok(Some(ServeAction::Attach(name))),
-        ClientMessage::Detach => Ok(Some(ServeAction::Prompt)),
-        ClientMessage::Kill => {
-            message_sender
-                .send(ServerInstruction::Kill)
-                .wrap_err("Failed to send kill instruction")?;
-
-            Ok(None)
-        }
-        ClientMessage::ProgramInput(bytes) => {
-            message_sender
-                .send(ServerInstruction::SendInput(bytes))
-                .wrap_err("Failed to send input instruction")?;
-
-            Ok(None)
-        }
-        ClientMessage::SynchronizationRequest => {
-            send_synchronization_payload(&mut writer, server_communicators).await?;
-            Ok(None)
-        }
-    }
-}
-
-async fn attach_client(
-    name: String,
-    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-    config: &'static Config,
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-) -> Result<ServeAction> {
-    let (message_sender, requets_sender, mut receiver) = match server_communicators.get(&name) {
-        Some(com) => (
-            com.instruction_sender.clone(),
-            com.client_request_sender.clone(),
-            com.server_message_sender.subscribe(),
-        ),
-        None => initialize_server(config, name, server_communicators).await?,
-    };
-
-    let (tx, rx) = oneshot::channel();
-
-    requets_sender.send(Request::GetHistory(tx))?;
-
-    let history = rx.await.unwrap_or_else(|err| {
-        LineBuffer::from(vec![
-            format!("Falied to produce history: {err:?}\n").into_bytes(),
-        ])
-    });
-
-    write_message!(writer, ServerMessage::History(history)).await?;
-
-    Ok(loop {
-        select! {
-            res = receiver.recv() => {
-                let message = match res {
-                    Ok(message) => message,
-                    Err(broadcast::error::RecvError::Closed) => {
-                        write_message!(writer, ServerMessage::Closed).await?;
-                        break ServeAction::Prompt;
-                    },
-                    Err(broadcast::error::RecvError::Lagged(messages)) => {
-                        eprintln!("Missed {messages} messages");
-                        continue;
-                    },
-                };
-
-                write_bytes!(writer, message).await?;
-            }
-
-            res = reader.read_u32() => {
-                let size = match res {
-                    Ok(n) => n as usize,
-                    Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
-                        println!("Graceful disconnect!!");
-                        return Ok(ServeAction::Disconnect);
-                    }
-                    Err(err) => return Err(err).wrap_err("Failed to read message size"),
-                };
-
-                handle_client_message((&mut reader, &mut writer), server_communicators, &message_sender, size).await?;
-            }
-        }
-    })
-}
-
-async fn serve_client(
-    (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-    config: &'static Config,
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
-) -> Result<()> {
-    let mut action = ServeAction::Prompt;
-
-    loop {
-        match action {
-            ServeAction::Prompt => {
-                action =
-                    prompt_client((&mut reader, &mut writer), config, server_communicators).await?;
-            }
-
-            ServeAction::Attach(name) => {
-                action = attach_client(
-                    name,
-                    (&mut reader, &mut writer),
-                    config,
-                    server_communicators,
-                )
-                .await?
-            }
-
-            ServeAction::Disconnect => break Ok(()),
-        }
-    }
 }
 
 pub async fn main() -> Result<()> {
@@ -406,7 +227,7 @@ pub async fn main() -> Result<()> {
 
                     println!("Connected to client by tcp: {addr}");
 
-                    if let Err(err) = serve_client(stream.split(), config, &server_communicators).await {
+                    if let Err(err) = Client::new(stream.split(), config, server_communicators).serve().await {
                         eprintln!("{err:?}");
                     }
 
@@ -422,7 +243,7 @@ pub async fn main() -> Result<()> {
 
                     println!("Connected to client by unix socket: {addr:?}");
 
-                    if let Err(err) = serve_client(stream.split(), config, &server_communicators).await {
+                    if let Err(err) = Client::new(stream.split(), config, server_communicators).serve().await {
                         eprintln!("{err:?}");
                     }
 
