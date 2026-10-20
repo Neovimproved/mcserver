@@ -87,7 +87,6 @@ async fn start_server(
 
                 history.push(bytes_read.to_owned());
 
-                // TODO: (potentially) encode before sending so that it only is encoded once
                 let _ = sender.send(bitcode::encode(&ServerMessage::Output(bytes_read.to_owned())));
                 continue;
             }
