@@ -25,6 +25,9 @@ mod metadata;
 mod server;
 mod servers;
 
+#[cfg(test)]
+mod test_utils;
+
 fn server(daemonize: bool) -> color_eyre::Result<()> {
     color_eyre::install()?;
 

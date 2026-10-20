@@ -213,27 +213,9 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
 mod test {
     use std::path::PathBuf;
 
-    use tempfile::TempDir;
+    use crate::test_utils::{new_dir, tempdir_init};
 
     use super::*;
-
-    // Not to be confused with the TEMP_DIR
-    fn tempdir_init() -> miette::Result<TempDir> {
-        tempfile::tempdir()
-            .into_diagnostic()
-            .wrap_err("Failed to create temporary directory")
-    }
-
-    async fn new_dir(parent: &Path, name: impl AsRef<Path>) -> miette::Result<PathBuf> {
-        let dir = parent.join(name);
-
-        fs::create_dir(&dir)
-            .await
-            .into_diagnostic()
-            .wrap_err_with(|| format!("Failed to create directory `{}`", display_path(&dir)))?;
-
-        Ok(dir)
-    }
 
     async fn new_server(
         parent: &Path,

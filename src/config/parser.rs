@@ -247,7 +247,7 @@ pub fn parse_config(document: &KdlDocument) -> Result<Config> {
         .get(Keys::DEFAULT_JAVA_ARGS)
         .map(|node| {
             node.iter_children()
-                .map(|child| format!("\"{}\"", child.name().value()))
+                .map(|child| child.name().value().to_string())
                 .collect()
         })
         .unwrap_or_default();

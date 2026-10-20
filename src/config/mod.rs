@@ -192,17 +192,13 @@ impl Config {
 }
 
 fn get_file_path() -> Result<PathBuf> {
-    if let Some(path) = env::var_os(CONFIG_FILE_VARIABLE) {
-        return Ok(PathBuf::from(path));
-    };
-
     let mut config_path = dirs::config_dir().ok_or(Error::ConfigDirectoryNotFound)?;
     config_path.extend([CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME]);
     Ok(config_path)
 }
 
-pub async fn read() -> Result<(Config, Option<KdlDocument>)> {
-    match fs::read_to_string(get_file_path()?).await {
+async fn read_file(file_path: &Path) -> Result<(Config, Option<KdlDocument>)> {
+    match fs::read_to_string(file_path).await {
         Ok(contents) => {
             let document = KdlDocument::parse(&contents)?;
             let config = parse_config(&document)?;
@@ -211,5 +207,127 @@ pub async fn read() -> Result<(Config, Option<KdlDocument>)> {
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Config::try_default()?, None)),
         Err(err) => Err(err.into()),
+    }
+}
+
+pub async fn read() -> Result<(Config, Option<KdlDocument>)> {
+    read_file(&match env::var_os(CONFIG_FILE_VARIABLE) {
+        Some(var) => PathBuf::from(var),
+        None => get_file_path()?,
+    })
+    .await
+}
+
+#[cfg(test)]
+mod test {
+    use miette::{Context, IntoDiagnostic};
+
+    use crate::test_utils::tempdir_init;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_read_file() -> miette::Result<()> {
+        let dir = tempdir_init()?;
+
+        let config_path = dir.path().join(CONFIG_FILE_NAME);
+
+        let java_args = [
+            "-Xms1G",
+            "-Xmx2G",
+            "-XX:+UseG1GC",
+            "-XX:+ParallelRefProcEnabled",
+            "-XX:MaxGCPauseMillis=200",
+            "-XX:+DisableExplicitGC",
+        ];
+
+        let java_args_string = java_args.iter().fold(String::from('\n'), |mut acc, item| {
+            acc.push_str("    \"");
+            acc.push_str(item);
+            acc.push_str("\"\n");
+            acc
+        });
+
+        // to test tilde and env expansion
+        let servers_directory = "~/$HOME/bum_cheeks";
+
+        // TODO: convert the test cases by removing the backslashes, leading and trailing quotations etc. in comparison rhs (removed for now)
+
+        let aliases = HashMap::from([
+            ("default", "hi"),
+            ("~^file.nix", "file.nix"),
+            ("-%po1a+!:-o.bum", "poo.bum"),
+            ("poop%", "hi"),
+            ("poop", "ksib"),
+        ]);
+
+        let aliases_string = aliases.iter().fold(String::from('\n'), |mut acc, item| {
+            acc.push_str("    ");
+            acc.push_str(item.0);
+            acc.push(' ');
+            acc.push_str(item.1);
+            acc.push('\n');
+            acc
+        });
+
+        // let terminal_interface = TerminalInterfaceConfig {
+        //     cursor_blink: todo!(),
+        //     background_color: todo!(),
+        //     selected_color: todo!(),
+        //     group_symbol_color: todo!(),
+        //     group_folded_symbol: todo!(),
+        //     group_expanded_symbol: todo!(),
+        //     server_offline_color: todo!(),
+        //     server_online_color: todo!(),
+        //     server_offline_symbol: todo!(),
+        //     server_online_symbol: todo!(),
+        // };
+
+        let config_string = format!(
+            r#"
+default-java-args {{{}}}
+
+// The directory where servers are stored and expected to be stored (local to home)
+servers-directory "{servers_directory}"
+
+// Aliases for your servers!
+aliases {{{}}}
+
+terminal-interface {{
+    cursor-blink #false
+
+    // background-color 22 22 30
+    background-color 26 27 38
+
+    selected-color 40 52 87
+}}
+            "#,
+            java_args_string, aliases_string
+        );
+
+        fs::write(&config_path, config_string)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| format!("Failed to write to config file `{config_path:?}`"))?;
+
+        let (config, _) = read_file(&config_path)
+            .await
+            .into_diagnostic()
+            .wrap_err("Failed to read config")?;
+
+        assert_eq!(&config.default_java_args, &java_args);
+
+        assert_eq!(&config.servers_directory.value, servers_directory);
+
+        assert_eq!(
+            config
+                .aliases
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect::<HashMap<&str, &str>>(),
+            aliases
+        );
+
+        Ok(())
     }
 }
