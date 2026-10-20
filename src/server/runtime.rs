@@ -23,7 +23,7 @@ use crate::{
     config::{self, Config},
     consts::{LOCAL_TCP_ADDR, MAX_MESSAGE_LENGTH, SOCKET_PATH},
     line_buffer::LineBuffer,
-    messages::{ClientMessage, ServerInstruction, ServerMessage, SynchronizationPayload},
+    messages::{ClientMessage, ServerInstruction, ServerMessage},
     metadata, read_message,
     server::types::{Request, ServerCommunicator},
     write_bytes, write_message,
@@ -160,6 +160,22 @@ enum ServeAction {
     Disconnect,
 }
 
+async fn send_synchronization_payload(
+    mut writer: impl AsyncWriteExt + Unpin,
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> Result<()> {
+    let message = ServerMessage::SynchronizationPayload {
+        online_servers: server_communicators
+            .iter()
+            .map(|pair| pair.key().clone())
+            .collect(),
+    };
+
+    write_message!(writer, message)
+        .await
+        .wrap_err("Failed to send synchronization payload to client")
+}
+
 async fn initialize_server(
     config: &'static Config,
     name: String,
@@ -219,14 +235,7 @@ async fn prompt_client(
             ClientMessage::Attach { name } => break ServeAction::Attach(name),
 
             ClientMessage::SynchronizationRequest => {
-                let message = ServerMessage::SynchronizationPayload(SynchronizationPayload {
-                    online_servers: server_communicators
-                        .iter()
-                        .map(|pair| pair.key().clone())
-                        .collect(),
-                });
-
-                write_message!(writer, message).await?;
+                send_synchronization_payload(&mut writer, server_communicators).await?
             }
             _ => {
                 write_message!(writer, ServerMessage::NotAttached).await?;
@@ -269,17 +278,7 @@ async fn handle_client_message(
             Ok(None)
         }
         ClientMessage::SynchronizationRequest => {
-            let payload = SynchronizationPayload {
-                online_servers: server_communicators
-                    .iter()
-                    .map(|pair| pair.key().clone())
-                    .collect(),
-            };
-
-            write_message!(writer, ServerMessage::SynchronizationPayload(payload))
-                .await
-                .wrap_err("Failed to send synchronization paylaod to client")?;
-
+            send_synchronization_payload(&mut writer, server_communicators).await?;
             Ok(None)
         }
     }

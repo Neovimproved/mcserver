@@ -34,12 +34,6 @@ pub fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
     string
 }
 
-#[derive(Debug, Decode, Clone, Encode, Display)]
-#[display("Synchronization payload")]
-pub struct SynchronizationPayload {
-    pub online_servers: HashSet<String>,
-}
-
 #[derive(Debug)]
 pub enum ServerInstruction {
     Kill,
@@ -77,7 +71,16 @@ pub enum ServerMessage {
     }))]
     History(LineBuffer<Vec<u8>>),
 
-    SynchronizationPayload(SynchronizationPayload),
+    #[display("Online servers: ({})", online_servers.iter().enumerate().fold(String::new(), |mut acc, (idx, server)| {
+        acc.push_str(server);
+
+        if idx != online_servers.len() - 1 {
+            acc.push_str(", ");
+        }
+
+        acc
+    }))]
+    SynchronizationPayload { online_servers: HashSet<String> },
 }
 
 #[derive(Debug, Decode, Display, Encode)]

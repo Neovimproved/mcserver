@@ -403,7 +403,7 @@ impl App {
 
     pub fn synchronize_servers(
         children: &mut [ServerEntry],
-        online_servers: &mut HashSet<String>,
+        online_servers: &HashSet<String>,
         path: Vec<String>,
     ) {
         let joint = path.join("/");
@@ -418,8 +418,6 @@ impl App {
                 ServerEntry::Object(server_object) => {
                     let name = format!("{joint}/{}", server_object.name);
                     if online_servers.contains(&name) {
-                        // TODO: remove later
-                        online_servers.remove(&joint);
                         server_object.online = true;
                         log!("{}!!!", server_object.name);
                     } else {
@@ -507,13 +505,9 @@ impl App {
                 }
             }
 
-            ServerMessage::SynchronizationPayload(mut payload) => {
+            ServerMessage::SynchronizationPayload { online_servers } => {
                 log!("Received payload!");
-                Self::synchronize_servers(
-                    &mut self.server_list.servers,
-                    &mut payload.online_servers,
-                    vec![],
-                );
+                Self::synchronize_servers(&mut self.server_list.servers, &online_servers, vec![]);
             }
         }
 
