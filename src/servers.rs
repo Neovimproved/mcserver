@@ -1,10 +1,10 @@
 use std::{
     fmt::{self, Display},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use miette::{Context, IntoDiagnostic};
-use tokio::fs::{self, ReadDir};
+use tokio::fs::{self, DirEntry, ReadDir};
 
 use crate::{
     consts::METADATA_DIRECTORY,
@@ -109,60 +109,108 @@ pub fn fmt_entries(
     Ok(())
 }
 
-pub async fn make_read_dir(dir: &Path) -> miette::Result<ReadDir> {
-    fs::read_dir(dir)
-        .await
-        .into_diagnostic()
-        .wrap_err_with(|| format!("Failed to read directory `{}`", display_path(dir)))
+struct ReadFrame {
+    path: PathBuf,
+    entries: Vec<ServerEntry>,
+    read_dir: ReadDir,
 }
 
-#[async_recursion::async_recursion]
-pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
-    let mut children: Vec<ServerEntry> = vec![];
-    let mut read_dir = make_read_dir(dir).await?;
+impl ReadFrame {
+    async fn try_new(path: PathBuf) -> miette::Result<Self> {
+        let read_dir = fs::read_dir(&path)
+            .await
+            .into_diagnostic()
+            .wrap_err_with(|| format!("Failed to read directory `{}`", display_path(&path)))?;
 
-    while let Some(entry) = read_dir
-        .next_entry()
-        .await
-        .into_diagnostic()
-        .wrap_err_with(|| {
-            format!(
-                "Failed to read entry from directory `{}`",
-                display_path(dir)
-            )
-        })?
-    {
-        let entry_path = entry.path();
+        Ok(Self {
+            path,
+            entries: vec![],
+            read_dir,
+        })
+    }
 
-        let relative_path = entry_path
-            .strip_prefix(dir)
+    async fn next(&mut self) -> miette::Result<Option<DirEntry>> {
+        self.read_dir
+            .next_entry()
+            .await
             .into_diagnostic()
             .wrap_err_with(|| {
+                format!(
+                    "Failed to read from directory `{}`",
+                    display_path(&self.path)
+                )
+            })
+    }
+
+    async fn try_into_group(self) -> miette::Result<ServerGroup> {
+        Ok(ServerGroup {
+            name: Path::new(
+                self.path
+                    .file_name()
+                    .wrap_err("Failed to get basename of path")?,
+            )
+            .to_path_buf()
+            .into_string()
+            .map_err(Error::NonUtf8Path)
+            .into_diagnostic()?,
+
+            children: self.entries,
+            expanded: false,
+        })
+    }
+}
+
+pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
+    let mut frames = vec![ReadFrame::try_new(dir.to_path_buf()).await?];
+
+    loop {
+        let frame = frames.last_mut().unwrap();
+        let mut exhausted = true;
+
+        while let Some(entry) = frame.next().await? {
+            let entry_path = entry.path();
+
+            let base_name = Path::new(entry_path.file_name().wrap_err_with(|| {
                 format!(
                     "Failed to strip `{}` from `{}`",
                     display_path(dir),
                     display_path(&entry_path)
                 )
-            })?
+            })?)
             .to_path_buf()
             .into_string()
             .map_err(Error::NonUtf8Path)
             .into_diagnostic()?;
 
-        if fs::try_exists(entry_path.join(METADATA_DIRECTORY))
-            .await
-            .into_diagnostic()
-            .wrap_err("Failed to check if directory exists")?
-        {
-            children.push(ServerEntry::object(relative_path, false));
+            if fs::try_exists(entry_path.join(METADATA_DIRECTORY))
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to check if directory exists")?
+            {
+                frame.entries.push(ServerEntry::object(base_name, false));
+            } else {
+                exhausted = false;
+                frames.push(ReadFrame::try_new(entry_path).await?);
+                break;
+            }
+        }
+
+        if !exhausted {
+            continue;
+        }
+
+        let mut frame = frames.pop().unwrap();
+
+        frame.entries.sort_unstable();
+
+        if let Some(parent) = frames.last_mut() {
+            parent
+                .entries
+                .push(ServerEntry::Group(frame.try_into_group().await?));
         } else {
-            children.push(ServerEntry::group(relative_path, read(&entry_path).await?));
+            break Ok(frame.entries);
         }
     }
-
-    children.sort_unstable();
-
-    Ok(children)
 }
 
 #[cfg(test)]
