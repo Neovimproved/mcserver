@@ -647,11 +647,12 @@ impl App {
         }
     }
 
-    fn draw_servers_list_widget(&self, height_available: u16) -> List<'_> {
+    fn draw_servers_list_widget(&self) -> List<'_> {
         let mut counter = 0;
 
         let mut lines = vec![];
 
+        // TODO: improve drawing efficiency
         self.draw_entries(
             &self.server_list.servers,
             &mut lines,
@@ -689,7 +690,7 @@ impl App {
         } = &self.mode
         else {
             let area = frame.area();
-            frame.render_widget(self.draw_servers_list_widget(area.height), area);
+            frame.render_widget(self.draw_servers_list_widget(), area);
             return area.into();
         };
 
@@ -701,10 +702,7 @@ impl App {
 
             log!("Hello");
 
-            frame.render_widget(
-                self.draw_servers_list_widget(main_sections[0].height),
-                main_sections[0],
-            );
+            frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
 
             main_sections[1]
         } else {
