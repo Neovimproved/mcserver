@@ -48,10 +48,6 @@ pub enum ServerEntry {
 }
 
 impl ServerEntry {
-    fn group(name: String, children: Vec<ServerEntry>) -> Self {
-        Self::Group(ServerGroup::new(name, children, false))
-    }
-
     fn object(name: String, online: bool) -> Self {
         Self::Object(ServerObject { name, online })
     }
