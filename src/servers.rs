@@ -173,6 +173,7 @@ mod test {
 
     use super::*;
 
+    // Not to be confused with the TEMP_DIR
     fn tempdir_init() -> miette::Result<TempDir> {
         tempfile::tempdir()
             .into_diagnostic()
