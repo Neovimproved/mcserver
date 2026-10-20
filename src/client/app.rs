@@ -73,6 +73,7 @@ struct ServerList {
 }
 
 struct Area {
+    #[allow(dead_code)]
     width: usize,
     height: usize,
 }
@@ -86,10 +87,10 @@ impl From<Rect> for Area {
     }
 }
 
-#[allow(dead_code)]
 pub struct App {
     config: Config,
     mode: Mode,
+    #[allow(dead_code)]
     document: Option<KdlDocument>,
     server_list: ServerList,
     last_area: Area,
