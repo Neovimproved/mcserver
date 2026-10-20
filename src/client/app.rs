@@ -160,7 +160,7 @@ impl App {
                 selected: 0usize,
                 scroll: 0usize,
             },
-            // standard terminal area or something like that 🤷‍♂️
+            // standard terminal area or something like that
             last_area: Area {
                 width: 80,
                 height: 24,
