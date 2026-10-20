@@ -204,7 +204,7 @@ async fn initialize_server(
 async fn prompt_client(
     (mut reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
     _config: &'static Config,
-    _server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<ServeAction> {
     Ok(loop {
         let message: ClientMessage = match read_message!(reader).await {
@@ -218,6 +218,17 @@ async fn prompt_client(
 
         match message {
             ClientMessage::Attach { name } => break ServeAction::Attach(name),
+
+            ClientMessage::SynchronizationRequest => {
+                let message = ServerMessage::SynchronizationPayload(SynchronizationPayload {
+                    online_servers: server_communicators
+                        .iter()
+                        .map(|pair| pair.key().clone())
+                        .collect(),
+                });
+
+                write_message!(writer, message).await?;
+            }
             _ => {
                 write_message!(writer, ServerMessage::NotAttached).await?;
                 println!("Not attached but received {message}!");

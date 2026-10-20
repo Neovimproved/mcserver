@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     fmt::Debug,
     future::{Pending, pending},
     io::IsTerminal,
@@ -28,7 +29,7 @@ use crate::{
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry},
+    servers::{self, ServerEntry, ServerObject},
     write_message,
 };
 
@@ -223,7 +224,6 @@ impl App {
         }
 
         let Some(name) = name else {
-            log!("{counter}");
             return Ok(());
         };
 
@@ -401,6 +401,37 @@ impl App {
         )
     }
 
+    pub fn synchronize_servers(
+        children: &mut [ServerEntry],
+        online_servers: &mut HashSet<String>,
+        path: Vec<String>,
+    ) {
+        let joint = path.join("/");
+
+        for entry in children {
+            match entry {
+                ServerEntry::Group(server_group) => {
+                    let mut new_path = path.clone();
+                    new_path.push(server_group.name.clone());
+                    Self::synchronize_servers(&mut server_group.children, online_servers, new_path);
+                }
+                ServerEntry::Object(server_object) => {
+                    let name = format!("{joint}/{}", server_object.name);
+                    if online_servers.contains(&name) {
+                        // TODO: remove later
+                        online_servers.remove(&joint);
+                        server_object.online = true;
+                        log!("{}!!!", server_object.name);
+                    } else {
+                        server_object.online = false;
+                    }
+                }
+            }
+        }
+
+        log!("{}", online_servers.len());
+    }
+
     pub async fn read_message(
         &mut self,
         mut reader: impl AsyncReadExt + Unpin,
@@ -476,7 +507,14 @@ impl App {
                 }
             }
 
-            ServerMessage::SynchronizationPayload(_payload) => todo!(),
+            ServerMessage::SynchronizationPayload(mut payload) => {
+                log!("Received payload!");
+                Self::synchronize_servers(
+                    &mut self.server_list.servers,
+                    &mut payload.online_servers,
+                    vec![],
+                );
+            }
         }
 
         Ok(())
@@ -562,6 +600,25 @@ impl App {
         self.run(terminal, (reader, writer)).await
     }
 
+    fn find_first_online(children: &[ServerEntry]) -> Option<&ServerObject> {
+        for child in children {
+            match child {
+                ServerEntry::Group(server_group) => {
+                    if let Some(active) = Self::find_first_online(&server_group.children) {
+                        return Some(active);
+                    }
+                }
+                ServerEntry::Object(server_object) => {
+                    if server_object.online {
+                        return Some(server_object);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     fn draw_entries<'a>(
         &'a self,
         entries: &'a [ServerEntry],
@@ -585,6 +642,18 @@ impl App {
                                 .group_expanded_symbol
                                 .as_str()
                                 .fg(self.ti_cfg().group_symbol_color),
+                            Span::from(server_group.name.clone()),
+                        ]);
+                    } else if Self::find_first_online(&server_group.children).is_some() {
+                        spans.extend_from_slice(&[
+                            self.ti_cfg()
+                                .group_folded_symbol
+                                .as_str()
+                                .fg(self.ti_cfg().server_online_color),
+                            // self.ti_cfg()
+                            //     .server_online_symbol
+                            //     .as_str()
+                            //     .fg(self.ti_cfg().server_online_color),
                             Span::from(server_group.name.clone()),
                         ]);
                     } else {
@@ -618,7 +687,7 @@ impl App {
                     }
                 }
                 ServerEntry::Object(server_object) => {
-                    spans.extend(if *counter == attached {
+                    spans.extend(if server_object.online || *counter == attached {
                         [
                             self.ti_cfg()
                                 .server_online_symbol
@@ -706,8 +775,6 @@ impl App {
         let output_area = if matches!(state, ServerState::Escaping) {
             let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                 .split(frame.area());
-
-            log!("Hello");
 
             frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
 
@@ -836,13 +903,6 @@ impl App {
         if self.server_list.selected >= last_visible {
             self.server_list.selected = last_visible;
         }
-
-        log!(
-            "Scroll: {}\nHeight-1: {}\nLast visible: {}",
-            self.server_list.scroll,
-            self.last_area.height.saturating_sub(1),
-            last_visible
-        );
     }
 
     fn scroll_down(&mut self) {
