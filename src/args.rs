@@ -27,7 +27,6 @@ pub enum Command {
     #[command(visible_alias = "a", about = "Directly attach to a server")]
     Attach {
         #[arg(value_hint = ValueHint::DirPath)]
-        // TODO: maybe make optional (attach to default if none)
         server: Option<ServerArgument>,
     },
 

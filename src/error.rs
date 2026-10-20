@@ -50,7 +50,6 @@ pub enum Error {
     #[display("{_0}")]
     Metadata(MetadataError),
 
-    // TODO: replace non utf-8 bytes with question mark symbol
     #[display("`{}` could not be converted to string", display_path(_0))]
     NonUtf8Path(#[error(not(source))] PathBuf),
 
