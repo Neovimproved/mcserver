@@ -678,14 +678,6 @@ impl App {
         let output_text_width = output_area.width.saturating_sub(2) as usize;
         let output_lines_available = output_area.height.saturating_sub(2) as usize;
 
-        // mono
-        // negro
-        // ------------
-        // yes
-        // sir
-        // man
-        // yesman
-
         let mut output_lines = vec![];
         let mut current_line_utf8_length = 0;
 
