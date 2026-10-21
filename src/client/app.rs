@@ -749,7 +749,6 @@ impl App {
 
         let mut lines = vec![];
 
-        // TODO: improve drawing efficiency
         self.draw_entries(
             &self.server_list.servers,
             &mut lines,
