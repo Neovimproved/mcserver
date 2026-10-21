@@ -26,7 +26,7 @@ use app::App;
 
 pub use types::ServerArgument;
 
-use crate::consts::{SOCKET_FILE_NAME, SOCKET_PATH, TCP_PORT, TEMP_DIR};
+use crate::consts::{CONNECTION_PORT, SOCKET_FILE_NAME, SOCKET_PATH, TEMP_DIR};
 
 pub struct GuardedTerminal {
     terminal: DefaultTerminal,
@@ -140,7 +140,7 @@ pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
 }
 
 pub async fn try_connect_tcp(ip_addr: IpAddr) -> miette::Result<TcpStream> {
-    let socket_addr = SocketAddr::new(ip_addr, TCP_PORT);
+    let socket_addr = SocketAddr::new(ip_addr, CONNECTION_PORT);
 
     if ip_addr.is_loopback() {
         match TcpStream::connect(socket_addr).await {
