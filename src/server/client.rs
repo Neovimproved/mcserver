@@ -1,4 +1,4 @@
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 
 use color_eyre::eyre::{Context, Result, eyre};
 use dashmap::DashMap;
@@ -97,7 +97,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         &mut self,
         size: usize,
         message_sender: &UnboundedSender<ServerInstruction>,
-    ) -> Result<()> {
+    ) -> Result<Option<ServeAction>> {
         if size > MAX_MESSAGE_LENGTH {
             eprintln!(
                 "The client is being very disingenuous right now!! I'm going to have to break up with them unfortunately"
@@ -108,23 +108,30 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         let reader = &mut self.reader;
         let message: ClientMessage = read_message!(reader, size).await?;
 
-        match message {
-            ClientMessage::Attach { name } => self.action = ServeAction::Attach(name),
-            ClientMessage::Detach => self.action = ServeAction::Prompt,
+        let action = match message {
+            ClientMessage::Attach { name } => Some(ServeAction::Attach(name)),
+            ClientMessage::Detach => Some(ServeAction::Prompt),
             ClientMessage::Kill => {
                 message_sender
                     .send(ServerInstruction::Kill)
                     .wrap_err("Failed to send kill instruction")?;
+
+                None
             }
             ClientMessage::ProgramInput(bytes) => {
                 message_sender
                     .send(ServerInstruction::SendInput(bytes))
                     .wrap_err("Failed to send input instruction")?;
-            }
-            ClientMessage::SynchronizationRequest => self.send_synchronization_payload().await?,
-        }
 
-        Ok(())
+                None
+            }
+            ClientMessage::SynchronizationRequest => {
+                self.send_synchronization_payload().await?;
+                None
+            }
+        };
+
+        Ok(action)
     }
 
     async fn attach(&mut self, name: String) -> Result<ServeAction> {
@@ -185,7 +192,9 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
                         Err(err) => return Err(err).wrap_err("Failed to read message size"),
                     };
 
-                    self.handle_message(size, &message_sender).await?;
+                    if let Some(action) = self.handle_message(size, &message_sender).await? {
+                        break action;
+                    }
                 }
             }
         };
