@@ -111,7 +111,6 @@ async fn start_server(
                         };
                     }
                     ServerInstruction::SendInput(bytes) => {
-                        history.push(bytes.clone());
                         pty.write_all(&bytes).await?;
                         pty.flush().await.wrap_err("Failed to flush")?;
                     }
