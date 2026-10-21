@@ -4,11 +4,11 @@ use clap::Parser;
 use color_eyre::eyre::Context as EyreContext;
 use const_format::formatcp;
 use daemonize2::Daemonize;
-use miette::{Context, IntoDiagnostic};
+use miette::{Context, IntoDiagnostic, bail};
 use tokio::runtime::Runtime;
 
 use crate::{
-    args::{Args, Command},
+    args::{Args, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
     consts::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
     servers::ServerGroup,
@@ -94,12 +94,15 @@ fn tree() -> miette::Result<()> {
 fn main() -> miette::Result<()> {
     let args = Args::parse();
 
-    if args.server {
-        return server(true).map_err(miette::Report::msg);
-    }
-
-    if args.server_no_daemonize {
-        return server(false).map_err(miette::Report::msg);
+    if let Some(option) = args.server {
+        return server(match option.as_str() {
+            DAEMONIZE_OPTION_NAME => true,
+            NO_DAEMONIZE_OPTION_NAME => false,
+            _ => {
+                bail!("Unknown server option");
+            }
+        })
+        .map_err(miette::Report::msg);
     }
 
     let Some(command) = args.command else {
