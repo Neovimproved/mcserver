@@ -454,7 +454,6 @@ impl App {
             .wrap_err("Failed to receive message from server")?
         {
             ServerMessage::KillFailure(err) => log!("Failed to kill child: {err}"),
-            ServerMessage::KillSuccess => log!("Successfully killed the child process"),
             ServerMessage::Closed => {
                 if let Mode::Console { input, state, .. } = &mut self.mode {
                     *input = "Press enter to return...".to_string();

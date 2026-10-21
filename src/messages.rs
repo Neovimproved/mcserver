@@ -46,9 +46,6 @@ pub enum ServerMessage {
     #[display("Child has not been successfully killed ({_0})")]
     KillFailure(String),
 
-    #[display("Child has been killed")]
-    KillSuccess,
-
     #[display("Child has naturally closed")]
     Closed,
 

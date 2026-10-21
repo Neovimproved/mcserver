@@ -101,7 +101,7 @@ async fn start_server(
                     ServerInstruction::Kill => {
                         match child.kill().await {
                             Ok(()) => {
-                                sender.send(bitcode::encode(&ServerMessage::KillSuccess))?;
+                                sender.send(bitcode::encode(&ServerMessage::Closed))?;
                                 break;
                             }
                             Err(err) => {
