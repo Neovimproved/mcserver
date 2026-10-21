@@ -203,6 +203,8 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     pub async fn serve(&mut self) -> Result<()> {
+        self.send_synchronization_payload().await?;
+
         loop {
             match &self.action {
                 ServeAction::Prompt => {
