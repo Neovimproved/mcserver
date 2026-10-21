@@ -479,14 +479,14 @@ impl App {
                 }
             }
             ServerMessage::History(history) => {
-                log!(
-                    "Received history: {}",
-                    history
-                        .iter()
-                        .map(|line| String::from_utf8_lossy(line))
-                        .collect::<Vec::<_>>()
-                        .join("\n")
-                );
+                // log!(
+                //     "Received history: {}",
+                //     history
+                //         .iter()
+                //         .map(|line| String::from_utf8_lossy(line))
+                //         .collect::<Vec::<_>>()
+                //         .join("\n")
+                // );
                 if let Mode::Console { output, .. } = &mut self.mode {
                     history
                         .into_iter()
@@ -568,13 +568,51 @@ impl App {
         }
     }
 
+    pub fn find_server_and_expand(
+        name: &str,
+        entries: &mut [ServerEntry],
+        base_path: &str,
+        mut base_counter: usize,
+    ) -> Option<usize> {
+        for entry in entries {
+            match entry {
+                ServerEntry::Group(server_group) => {
+                    let group_entries = &mut server_group.children;
+
+                    if let Some(pos) = Self::find_server_and_expand(
+                        name,
+                        group_entries,
+                        &format!("{base_path}{}/", server_group.name),
+                        base_counter + 1,
+                    ) {
+                        server_group.expanded = true;
+                        return Some(pos);
+                    }
+                }
+                ServerEntry::Object(server_object) => {
+                    if name == format!("{base_path}{}", server_object.name) {
+                        return Some(base_counter);
+                    }
+                }
+            }
+
+            base_counter += 1;
+        }
+
+        None
+    }
+
     pub async fn run_attached(
         &mut self,
         terminal: &mut DefaultTerminal,
         (reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
         name: String,
     ) -> miette::Result<()> {
-        // TODO: use correct server
+        let pos = Self::find_server_and_expand(&name, &mut self.server_list.servers, "", 0)
+            .wrap_err_with(|| format!("{name} could not be found"))?;
+
+        self.server_list.selected = pos;
+
         self.try_select(&mut writer)
             .await
             .into_diagnostic()
@@ -610,8 +648,8 @@ impl App {
         counter: &mut usize,
         attached: usize,
     ) {
-        for (index, entry) in entries.iter().enumerate() {
-            let mut spans = if index == entries.len().saturating_sub(1) {
+        for (idx, entry) in entries.iter().enumerate() {
+            let mut spans = if idx == entries.len().saturating_sub(1) {
                 vec![Span::from(format!("{base_indentation}└╴"))]
             } else {
                 vec![Span::from(format!("{base_indentation}├╴"))]
