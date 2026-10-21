@@ -766,7 +766,6 @@ impl App {
         // 2 because of the top and bottom border
         // Extra 1 to make it representative of an index
 
-        // TODO: use this
         List::new(lines.into_iter().skip(self.server_list.scroll))
             .block(Block::new().title("Servers").borders(Borders::ALL))
     }
