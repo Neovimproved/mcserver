@@ -3,7 +3,7 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use const_format::formatcp;
 
 // Networking
-pub const TCP_PORT: u16 = 56608;
+pub const TCP_PORT: u16 = 56602;
 
 pub const LOCAL_TCP_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), TCP_PORT);
 
