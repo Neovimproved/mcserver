@@ -406,7 +406,11 @@ impl App {
         online_servers: &HashSet<String>,
         path: Vec<String>,
     ) {
-        let joint = path.join("/");
+        let joint = path.iter().fold(String::new(), |mut acc, item| {
+            acc.push_str(item);
+            acc.push('/');
+            acc
+        });
 
         for entry in children {
             match entry {
@@ -416,7 +420,7 @@ impl App {
                     Self::synchronize_servers(&mut server_group.children, online_servers, new_path);
                 }
                 ServerEntry::Object(server_object) => {
-                    let name = format!("{joint}/{}", server_object.name);
+                    let name = format!("{joint}{}", server_object.name);
                     if online_servers.contains(&name) {
                         server_object.online = true;
                         log!("{}!!!", server_object.name);
@@ -427,7 +431,7 @@ impl App {
             }
         }
 
-        log!("{}", online_servers.len());
+        // log!("{}", online_servers.len());
     }
 
     pub async fn read_message(
@@ -471,20 +475,6 @@ impl App {
             }
             ServerMessage::Output(bytes) => {
                 if let Mode::Console { output, .. } = &mut self.mode {
-                    let mut log_message = Vec::from(b"Message: ");
-
-                    for b in bytes.iter() {
-                        match *b {
-                            b'\n' => log_message.extend_from_slice(b"\\n"),
-                            b'\r' => log_message.extend_from_slice(b"\\r"),
-                            _ => log_message.push(*b),
-                        }
-                    }
-
-                    log_message.push(10);
-
-                    log_bytes!(log_message);
-
                     output.push(display_bytes(&bytes).to_string());
                 }
             }
@@ -505,7 +495,7 @@ impl App {
             }
 
             ServerMessage::SynchronizationPayload { online_servers } => {
-                log!("Received payload!");
+                log!("Received payload: {online_servers:?}!");
                 Self::synchronize_servers(&mut self.server_list.servers, &online_servers, vec![]);
             }
         }
