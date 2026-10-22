@@ -15,7 +15,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
-    text::{Line, Span, Text, ToLine, ToSpan, ToText},
+    text::{Line, Span, Text, ToLine, ToSpan},
     widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
@@ -85,13 +85,13 @@ struct ServerList {
     scroll: usize,
 }
 
-struct Area {
+struct AbsoluteArea {
     #[allow(dead_code)]
     width: usize,
     height: usize,
 }
 
-impl From<Rect> for Area {
+impl From<Rect> for AbsoluteArea {
     fn from(Rect { width, height, .. }: Rect) -> Self {
         Self {
             width: width as usize,
@@ -106,7 +106,7 @@ pub struct App {
     #[allow(dead_code)]
     document: Option<KdlDocument>,
     server_list: ServerList,
-    last_area: Area,
+    last_area: AbsoluteArea,
     blinking: bool,
     exiting: bool,
 }
@@ -175,7 +175,7 @@ impl App {
                 scroll: 0usize,
             },
             // standard terminal area or something like that
-            last_area: Area {
+            last_area: AbsoluteArea {
                 width: 80,
                 height: 24,
             },
@@ -789,10 +789,9 @@ impl App {
 
     fn draw_output_widget(
         &self,
-        output_area: Area,
+        output_area: AbsoluteArea,
         input: &str,
         output: &LineBuffer,
-        state: &ServerState,
     ) -> List<'_> {
         // TODO: use a fucking terminal thing
         let output_text_width = output_area.width.saturating_sub(2);
@@ -868,7 +867,7 @@ impl App {
         horizontal_layout[1]
     }
 
-    fn render(&self, frame: &mut Frame) -> Area {
+    fn render(&self, frame: &mut Frame) -> AbsoluteArea {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
 
@@ -917,7 +916,7 @@ impl App {
                     frame.area()
                 };
 
-                let widget = self.draw_output_widget(output_area.into(), input, output, state);
+                let widget = self.draw_output_widget(output_area.into(), input, output);
 
                 frame.render_widget(widget, output_area);
             }
