@@ -35,7 +35,9 @@ fn server(daemonize: bool) -> color_eyre::Result<()> {
 
     if !daemonize {
         // no daemonize
-        Runtime::new()?.block_on(runtime::main())?;
+        Runtime::new()
+            .wrap_err("Failed to initialize runtime")?
+            .block_on(runtime::main())?;
         return Ok(());
     }
 
@@ -57,7 +59,7 @@ fn server(daemonize: bool) -> color_eyre::Result<()> {
     println!("Successfully daemonized!");
 
     Runtime::new()
-        .wrap_err("Failed to")?
+        .wrap_err("Failed to initialize runtime")?
         .block_on(server::runtime::main())?;
 
     println!("Finished!");
