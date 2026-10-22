@@ -246,8 +246,6 @@ impl App {
                     .await
                     .into_diagnostic()
                     .wrap_err("Failed to select item")?,
-                // KeyCode::Left | KeyCode::Char('h') => self.selection_left(),
-                // KeyCode::Right | KeyCode::Char('l') => self.selection_right(),
                 KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                 KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
@@ -262,11 +260,7 @@ impl App {
                 KeyCode::Char('g') => self.server_list.selected = 0,
                 KeyCode::Char('G') => self.selection_bottom(),
 
-                // TODO: these should actually by different from left and right
-                KeyCode::Tab => todo!("Implement tab"),
-                KeyCode::BackTab => todo!("Implement back tab"),
-
-                // KeyCode::Esc => self.exit(),
+                KeyCode::Esc => self.exit(),
                 KeyCode::Char(ch) => match ch {
                     'q' => self.exit(),
                     'D' => {
