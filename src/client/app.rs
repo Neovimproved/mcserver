@@ -15,8 +15,8 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
-    text::{Line, Span, ToLine, ToSpan},
-    widgets::{Block, Borders, List},
+    text::{Line, Span, Text, ToLine, ToSpan, ToText},
+    widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -34,6 +34,21 @@ use crate::{
 };
 
 #[derive(Debug)]
+enum SelectionState {
+    Normal,
+    Adding { input: String },
+    Deleting,
+}
+
+impl SelectionState {
+    fn adding() -> Self {
+        Self::Adding {
+            input: "".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
 enum ServerState {
     Normal,
     Escaping,
@@ -42,15 +57,13 @@ enum ServerState {
 
 #[derive(Debug)]
 enum Mode {
-    Selecting,
-    Deletion,
+    Selecting(SelectionState),
     Console {
         attached_server: usize,
         name: String,
         input: String,
         output: LineBuffer,
         state: ServerState,
-        blinking: bool,
     },
 }
 
@@ -62,7 +75,6 @@ impl Mode {
             input: String::new(),
             output: LineBuffer::new(),
             state: ServerState::Normal,
-            blinking: true,
         }
     }
 }
@@ -95,6 +107,7 @@ pub struct App {
     document: Option<KdlDocument>,
     server_list: ServerList,
     last_area: Area,
+    blinking: bool,
     exiting: bool,
 }
 
@@ -166,7 +179,8 @@ impl App {
                 width: 80,
                 height: 24,
             },
-            mode: Mode::Selecting,
+            mode: Mode::Selecting(SelectionState::Normal),
+            blinking: true,
             exiting: false,
         })
     }
@@ -240,51 +254,66 @@ impl App {
         mut writer: impl AsyncWriteExt + Unpin,
     ) -> miette::Result<()> {
         match &mut self.mode {
-            Mode::Selecting => match key.code {
-                KeyCode::Enter => self
-                    .try_select(&mut writer)
-                    .await
-                    .into_diagnostic()
-                    .wrap_err("Failed to select item")?,
-                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
-
-                KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.scroll_down();
-                }
-
-                KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.scroll_up();
-                }
-
-                KeyCode::Char('g') => self.server_list.selected = 0,
-                KeyCode::Char('G') => self.selection_bottom(),
-
-                KeyCode::Esc => self.exit(),
-                KeyCode::Char(ch) => match ch {
-                    'q' => self.exit(),
-                    'D' => {
-                        self.mode = Mode::Deletion;
-                    }
-
-                    's' => write_message!(writer, ClientMessage::SynchronizationRequest)
+            Mode::Selecting(selection_state) => match selection_state {
+                SelectionState::Normal => match key.code {
+                    KeyCode::Enter => self
+                        .try_select(&mut writer)
                         .await
                         .into_diagnostic()
-                        .wrap_err("Failed to make synchronization request")?,
+                        .wrap_err("Failed to select item")?,
+                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
-                    // for debugging things
-                    #[cfg(debug_assertions)]
-                    'd' => {
-                        log!("{}", readable_pretty(&self.server_list.servers));
-                        log!("Position: {}", self.server_list.selected);
+                    KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_down();
                     }
 
+                    KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_up();
+                    }
+
+                    KeyCode::Char('g') => self.server_list.selected = 0,
+                    KeyCode::Char('G') => self.selection_bottom(),
+
+                    KeyCode::Esc => self.exit(),
+                    KeyCode::Char(ch) => match ch {
+                        'a' => *selection_state = SelectionState::adding(),
+
+                        'D' => *selection_state = SelectionState::Deleting,
+
+                        // for debugging things
+                        #[cfg(debug_assertions)]
+                        'd' => {
+                            log!("{}", readable_pretty(&self.server_list.servers));
+                            log!("Position: {}", self.server_list.selected);
+                        }
+
+                        'q' => self.exit(),
+
+                        's' => write_message!(writer, ClientMessage::SynchronizationRequest)
+                            .await
+                            .into_diagnostic()
+                            .wrap_err("Failed to make synchronization request")?,
+
+                        _ => {}
+                    },
                     _ => {}
                 },
-                _ => {}
+                SelectionState::Adding { input } => match key.code {
+                    KeyCode::Esc => *selection_state = SelectionState::Normal,
+                    KeyCode::Char(ch) => {
+                        input.push(ch);
+                        log!("Input received: {ch}");
+                    }
+                    // TODO: actually create the server here
+                    KeyCode::Enter => *selection_state = SelectionState::Normal,
+                    KeyCode::Backspace => {
+                        input.pop();
+                    }
+                    _ => {}
+                },
+                SelectionState::Deleting => todo!(),
             },
-
-            Mode::Deletion => todo!(),
 
             Mode::Console {
                 state: ServerState::Dead,
@@ -377,24 +406,14 @@ impl App {
     pub async fn handle_blink_event(
         &mut self,
         blink_event: &mut Pin<&mut Either<Sleep, Pending<()>>>,
-    ) -> miette::Result<bool> {
+    ) {
         blink_event.set(if let Some(interval) = self.ti_cfg().cursor_blink {
             Either::Left(sleep(interval))
         } else {
             Either::Right(pending())
         });
 
-        Ok(
-            if let Mode::Console {
-                blinking: blink, ..
-            } = &mut self.mode
-            {
-                *blink = !*blink;
-                true
-            } else {
-                false
-            },
-        )
+        self.blinking = !self.blinking;
     }
 
     pub fn synchronize_servers(
@@ -554,7 +573,10 @@ impl App {
                     true
                 }
 
-                _ = &mut blink_event => self.handle_blink_event(&mut blink_event).await?,
+                _ = &mut blink_event => {
+                    self.handle_blink_event(&mut blink_event).await;
+                    true
+                },
 
                 length = reader.read_u32() => {
                     self.read_message(&mut reader, length).await?;
@@ -765,41 +787,16 @@ impl App {
             .block(Block::new().title("Servers").borders(Borders::ALL))
     }
 
-    fn render(&self, frame: &mut Frame) -> Area {
-        if let Some(background_color) = self.ti_cfg().background_color {
-            let background_block = Block::new().style(Style::new().bg(background_color));
-
-            frame.render_widget(background_block, frame.area());
-        }
-
-        let Mode::Console {
-            input,
-            output,
-            state,
-            blinking,
-            ..
-        } = &self.mode
-        else {
-            let area = frame.area();
-            frame.render_widget(self.draw_servers_list_widget(), area);
-            return area.into();
-        };
-
+    fn draw_output_widget(
+        &self,
+        output_area: Area,
+        input: &str,
+        output: &LineBuffer,
+        state: &ServerState,
+    ) -> List<'_> {
         // TODO: use a fucking terminal thing
-
-        let output_area = if matches!(state, ServerState::Escaping) {
-            let main_sections = Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
-                .split(frame.area());
-
-            frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
-
-            main_sections[1]
-        } else {
-            frame.area()
-        };
-
-        let output_text_width = output_area.width.saturating_sub(2) as usize;
-        let output_lines_available = output_area.height.saturating_sub(2) as usize;
+        let output_text_width = output_area.width.saturating_sub(2);
+        let output_lines_available = output_area.height.saturating_sub(2);
 
         let mut output_lines = vec![];
         let mut current_line_utf8_length = 0;
@@ -809,6 +806,7 @@ impl App {
             // use skip here to get the maximum number of lines that might need to be used
             // Then, the lines that aren't used will simply not be rendered
             .skip(output.len().saturating_sub(output_lines_available))
+            .map(String::as_str)
             .chain(iter::once(input))
             .fold(String::new(), |mut acc, item| {
                 for ch in item.chars() {
@@ -834,7 +832,7 @@ impl App {
                 acc
             });
 
-        if !*blinking {
+        if !self.blinking {
             output_lines.push(Line::from(last_line));
         } else if current_line_utf8_length + 1 >= output_text_width {
             output_lines.push(Line::from(last_line));
@@ -846,19 +844,90 @@ impl App {
 
         let line_count = output_lines.len();
 
-        let output_widget = List::new(
+        List::new(
             output_lines
                 .into_iter()
                 .skip(line_count.saturating_sub(output_lines_available)),
         )
-        .block(Block::new().title("Console").borders(Borders::ALL));
+        .block(Block::new().title("Console").borders(Borders::ALL))
+    }
 
-        frame.render_widget(output_widget, output_area);
-        frame.area().into()
+    fn center_rect(area: Rect, x_percent: u16, y_percent: u16) -> Rect {
+        let horizontal_fill = 50u16.saturating_sub(x_percent / 2);
+        let vertical_fill = 50u16.saturating_sub(y_percent / 2);
+
+        let vertical_layout =
+            Layout::vertical([vertical_fill, y_percent, vertical_fill].map(Constraint::Percentage))
+                .split(area);
+
+        let horizontal_layout = Layout::horizontal(
+            [horizontal_fill, x_percent, horizontal_fill].map(Constraint::Percentage),
+        )
+        .split(vertical_layout[1]);
+
+        horizontal_layout[1]
+    }
+
+    fn render(&self, frame: &mut Frame) -> Area {
+        if let Some(background_color) = self.ti_cfg().background_color {
+            let background_block = Block::new().style(Style::new().bg(background_color));
+
+            frame.render_widget(background_block, frame.area());
+        }
+
+        let frame_area = frame.area();
+
+        match &self.mode {
+            Mode::Selecting(selection_state) => {
+                frame.render_widget(self.draw_servers_list_widget(), frame_area);
+
+                match selection_state {
+                    SelectionState::Normal => {}
+                    SelectionState::Adding { input } => {
+                        log!("{input}");
+                        let add_block = Paragraph::new(if self.blinking {
+                            Text::from(format!("{input}█"))
+                        } else {
+                            Text::from(input.as_str())
+                        })
+                        .block(Block::bordered().title("Adding server"))
+                        .wrap(Wrap { trim: false });
+
+                        frame.render_widget(add_block, Self::center_rect(frame_area, 20, 20));
+                    }
+                    SelectionState::Deleting => {}
+                }
+            }
+
+            Mode::Console {
+                input,
+                output,
+                state,
+                ..
+            } => {
+                let output_area = if matches!(state, ServerState::Escaping) {
+                    let main_sections =
+                        Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
+                            .split(frame.area());
+
+                    frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
+
+                    main_sections[1]
+                } else {
+                    frame.area()
+                };
+
+                let widget = self.draw_output_widget(output_area.into(), input, output, state);
+
+                frame.render_widget(widget, output_area);
+            }
+        }
+
+        frame_area.into()
     }
 
     fn selection_mode(&mut self) {
-        self.mode = Mode::Selecting;
+        self.mode = Mode::Selecting(SelectionState::Normal);
     }
 
     fn selection_up(&mut self) {
