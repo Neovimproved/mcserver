@@ -272,7 +272,9 @@ impl App {
                         .into_diagnostic()
                         .wrap_err("Failed to make synchronization request")?,
 
-                    'u' => {
+                    // for debugging things
+                    #[cfg(debug_assertions)]
+                    'd' => {
                         log!("{}", readable_pretty(&self.server_list.servers));
                         log!("Position: {}", self.server_list.selected);
                     }
