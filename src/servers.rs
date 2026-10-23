@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     fmt::{self, Display},
     path::{Path, PathBuf},
 };
@@ -28,10 +29,17 @@ impl ServerGroup {
     }
 }
 
+const SERVER_GROUP_ANSI_COLOR: u8 = 34;
+
 impl Display for ServerGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.name)?;
-        fmt_entries(&self.children, f, "", 3)
+        if f.alternate() {
+            write!(f, "\x1b[1;{SERVER_GROUP_ANSI_COLOR}m{}\x1b[0m", self.name)?;
+        } else {
+            write!(f, "{}", self.name)?;
+        }
+
+        display_entries(&self.children, f, "", f.width().unwrap_or(3), f.alternate())
     }
 }
 
@@ -41,10 +49,31 @@ pub struct ServerObject {
     pub online: bool,
 }
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum ServerEntry {
     Group(ServerGroup),
     Object(ServerObject),
+}
+
+impl ServerEntry {
+    pub fn name(&self) -> &str {
+        match self {
+            ServerEntry::Group(server_group) => &server_group.name,
+            ServerEntry::Object(server_object) => &server_object.name,
+        }
+    }
+}
+
+impl Ord for ServerEntry {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.name().cmp(other.name())
+    }
+}
+
+impl PartialOrd for ServerEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl ServerEntry {
@@ -62,26 +91,46 @@ impl Display for ServerEntry {
     }
 }
 
-pub fn fmt_entries(
+pub fn display_entries(
     entries: &[ServerEntry],
     f: &mut fmt::Formatter,
     base_indentation: &str,
     indentation_width: usize,
+    ansi_colors: bool,
 ) -> fmt::Result {
     for (idx, entry) in entries.iter().enumerate() {
         match entry {
             ServerEntry::Group(server_group) => {
                 if idx == entries.len().saturating_sub(1) {
-                    writeln!(f, "{base_indentation}└╴{}", server_group.name)?;
-                    fmt_entries(
+                    write!(f, "\n{base_indentation}└──")?;
+
+                    if ansi_colors {
+                        write!(
+                            f,
+                            "\x1b[1;{SERVER_GROUP_ANSI_COLOR}m{}\x1b[0m",
+                            server_group.name
+                        )?;
+                    } else {
+                        write!(f, "{}", server_group.name)?;
+                    }
+
+                    display_entries(
                         &server_group.children,
                         f,
                         &format!("{base_indentation}{}", " ".repeat(indentation_width)),
                         indentation_width,
+                        ansi_colors,
                     )
                 } else {
-                    writeln!(f, "{base_indentation}├╴{}", server_group.name)?;
-                    fmt_entries(
+                    write!(f, "\n{base_indentation}├──")?;
+
+                    if ansi_colors {
+                        write!(f, "\x1b[1;34m{}\x1b[0m", server_group.name)?;
+                    } else {
+                        write!(f, "{}", server_group.name)?;
+                    }
+
+                    display_entries(
                         &server_group.children,
                         f,
                         &format!(
@@ -89,15 +138,24 @@ pub fn fmt_entries(
                             " ".repeat(indentation_width.saturating_sub(1))
                         ),
                         indentation_width,
+                        ansi_colors,
                     )
                 }
             }
             ServerEntry::Object(server_object) => {
                 if idx == entries.len().saturating_sub(1) {
-                    writeln!(f, "{base_indentation}└╴{}", server_object.name)
+                    write!(f, "\n{base_indentation}└──")?;
                 } else {
-                    writeln!(f, "{base_indentation}├╴{}", server_object.name)
+                    write!(f, "\n{base_indentation}├──")?;
                 }
+
+                // if ansi_colors {
+                //     writeln!(f, "\x1b[1;33m{}\x1b[0m", server_object.name)
+                // } else {
+                //     writeln!(f, "{}", server_object.name)
+                // }
+
+                write!(f, "{}", server_object.name)
             }
         }?;
     }

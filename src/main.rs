@@ -5,7 +5,10 @@ use color_eyre::eyre::Context as EyreContext;
 use const_format::formatcp;
 use daemonize2::Daemonize;
 use miette::{Context, IntoDiagnostic, bail};
-use tokio::runtime::Runtime;
+use tokio::{
+    io::{self, AsyncWriteExt},
+    runtime::Runtime,
+};
 
 use crate::{
     args::{Args, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
@@ -85,7 +88,7 @@ fn tree() -> miette::Result<()> {
             .wrap_err("Failed to read server entries")?;
 
         println!(
-            "{}",
+            "{:#}",
             ServerGroup::new(servers_directory.value, entries, true)
         );
 
