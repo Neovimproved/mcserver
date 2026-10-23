@@ -11,6 +11,13 @@ fn terminal_like_bytes(bytes: &str, normal_end: usize) -> String {
     bytes[normal_end..].chars().for_each(|ch| {
         let num = ch as u32;
         match num {
+            // 9: horizontal tab
+            // 10: newline
+            // 11: vertical tab
+            // 12: form feed
+            // 13: carriage return
+            // (legacy costs)
+            9..=13 => acc.push(ch),
             0..31 => unsafe { acc.push_str(str::from_utf8_unchecked(&[b'^', ch as u8 + 64])) },
             _ => acc.push(ch),
         }
@@ -24,8 +31,7 @@ pub fn display_bytes<'a>(bytes: &'a [u8]) -> Cow<'a, str> {
 
     for (idx, ch) in string.char_indices() {
         match ch as u32 {
-            // tab, newline, carriage return (legacy costs)
-            9 | 10 | 13 => {}
+            9..=13 => {}
             0..=31 => return Cow::Owned(terminal_like_bytes(&string, idx)),
             _ => {}
         }
