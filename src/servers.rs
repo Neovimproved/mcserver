@@ -312,25 +312,24 @@ mod test {
 
         let expected = "\
 root
-├╴group-0
-│  ├╴server-0-group0
-│  └╴server-1-group0
-├╴group-1
-│  ├╴server-0-group1
-│  └╴server-1-group1
-├╴subgroup-0-group-0
-│  ├╴server-0-subgroup-0-group-0
-│  └╴server-1-subgroup-0-group-0
-├╴subgroup-0-group-1
-│  ├╴server-0-subgroup-0-group-1
-│  └╴server-1-subgroup-0-group-1
-├╴subgroup-1-group-0
-│  ├╴server-0-subgroup-1-group-0
-│  └╴server-1-subgroup-1-group-0
-└╴subgroup-1-group-1
-   ├╴server-0-subgroup-1-group-1
-   └╴server-1-subgroup-1-group-1
-";
+├──group-0
+│  ├──server-0-group0
+│  └──server-1-group0
+├──group-1
+│  ├──server-0-group1
+│  └──server-1-group1
+├──subgroup-0-group-0
+│  ├──server-0-subgroup-0-group-0
+│  └──server-1-subgroup-0-group-0
+├──subgroup-0-group-1
+│  ├──server-0-subgroup-0-group-1
+│  └──server-1-subgroup-0-group-1
+├──subgroup-1-group-0
+│  ├──server-0-subgroup-1-group-0
+│  └──server-1-subgroup-1-group-0
+└──subgroup-1-group-1
+   ├──server-0-subgroup-1-group-1
+   └──server-1-subgroup-1-group-1";
 
         assert_eq!(output, expected);
 
