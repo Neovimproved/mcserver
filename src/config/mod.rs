@@ -147,6 +147,9 @@ impl TerminalInterfaceDefaults {
     const GROUP_FOLDED_SYMBOL: &str = "󰉋 ";
     const GROUP_EXPANDED_SYMBOL: &str = "󰝰 ";
 
+    // highly intrusive: 252, 186, 3
+    // less intrusive: 222, 186, 30
+    // quite intrusive stil but: 222, 156, 50
     const SERVER_OFFLINE_COLOR: Color = Color::Rgb(222, 156, 50);
     const SERVER_ONLINE_COLOR: Color = Color::Green;
     const SERVER_OFFLINE_SYMBOL: &str = " ";

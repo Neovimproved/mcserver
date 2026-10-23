@@ -494,14 +494,6 @@ impl App {
                 }
             }
             ServerMessage::History(history) => {
-                // log!(
-                //     "Received history: {}",
-                //     history
-                //         .iter()
-                //         .map(|line| String::from_utf8_lossy(line))
-                //         .collect::<Vec::<_>>()
-                //         .join("\n")
-                // );
                 if let Mode::Console { output, .. } = &mut self.mode {
                     history
                         .into_iter()
@@ -689,10 +681,6 @@ impl App {
                                 .group_folded_symbol
                                 .as_str()
                                 .fg(self.ti_cfg().server_online_color),
-                            // self.ti_cfg()
-                            //     .server_online_symbol
-                            //     .as_str()
-                            //     .fg(self.ti_cfg().server_online_color),
                             Span::from(server_group.name.clone()),
                         ]);
                     } else {
@@ -725,6 +713,7 @@ impl App {
                         );
                     }
                 }
+
                 ServerEntry::Object(server_object) => {
                     spans.extend(if server_object.online || *counter == attached {
                         [
@@ -735,11 +724,7 @@ impl App {
                             server_object.name.to_span(),
                         ]
                     } else {
-                        // [" ".to_span(), server_object.name.to_span()]
                         [
-                            // highly intrusive: 252, 186, 3
-                            // less intrusive: 222, 186, 30
-                            // quite intrusive stil but: 222, 156, 50
                             self.ti_cfg()
                                 .server_offline_symbol
                                 .as_str()
@@ -793,7 +778,7 @@ impl App {
         input: &str,
         output: &LineBuffer,
     ) -> List<'_> {
-        // TODO: use a fucking terminal thing
+        // TODO: use a f terminal thing
         let output_text_width = output_area.width.saturating_sub(2);
         let output_lines_available = output_area.height.saturating_sub(2);
 
