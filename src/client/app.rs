@@ -659,39 +659,39 @@ impl App {
         attached: usize,
     ) {
         for (idx, entry) in entries.iter().enumerate() {
-            let mut spans = if idx == entries.len().saturating_sub(1) {
-                vec![Span::from(format!("{base_indentation}└╴"))]
+            let mut indentation_span = if idx == entries.len().saturating_sub(1) {
+                format!("{base_indentation}└╴")
             } else {
-                vec![Span::from(format!("{base_indentation}├╴"))]
+                format!("{base_indentation}├╴")
             };
+
+            let mut spans = if *counter == self.server_list.selected {
+                indentation_span = indentation_span.chars().skip(1).collect();
+                vec!["❯".to_span()]
+            } else {
+                vec![]
+            };
+
+            spans.push(Span::from(indentation_span));
 
             match entry {
                 ServerEntry::Group(server_group) => {
-                    if server_group.expanded {
-                        spans.extend_from_slice(&[
-                            self.ti_cfg()
-                                .group_expanded_symbol
-                                .as_str()
-                                .fg(self.ti_cfg().group_symbol_color),
-                            Span::from(server_group.name.clone()),
-                        ]);
-                    } else if Self::find_first_online(&server_group.children).is_some() {
-                        spans.extend_from_slice(&[
-                            self.ti_cfg()
-                                .group_folded_symbol
-                                .as_str()
-                                .fg(self.ti_cfg().server_online_color),
-                            Span::from(server_group.name.clone()),
-                        ]);
+                    spans.push(if server_group.expanded {
+                        self.ti_cfg()
+                            .group_expanded_symbol
+                            .as_str()
+                            .fg(self.ti_cfg().group_symbol_color)
                     } else {
-                        spans.extend_from_slice(&[
-                            self.ti_cfg()
-                                .group_folded_symbol
-                                .as_str()
-                                .fg(self.ti_cfg().group_symbol_color),
-                            Span::from(server_group.name.clone()),
-                        ]);
-                    };
+                        let group_folded_sym = self.ti_cfg().group_folded_symbol.as_str();
+
+                        if Self::find_first_online(&server_group.children).is_some() {
+                            group_folded_sym.fg(self.ti_cfg().server_online_color)
+                        } else {
+                            group_folded_sym.fg(self.ti_cfg().group_symbol_color)
+                        }
+                    });
+
+                    spans.push(Span::from(&server_group.name));
 
                     let line = if *counter == self.server_list.selected {
                         Line::from(spans).bg(self.ti_cfg().selected_color)
