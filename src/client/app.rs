@@ -892,7 +892,7 @@ impl App {
                         .block(Block::bordered().title("Adding server"))
                         .wrap(Wrap { trim: false });
 
-                        frame.render_widget(add_block, Self::center_rect(frame_area, 20, 20));
+                        frame.render_widget(add_block, Self::center_rect(frame_area, 40, 40));
                     }
                     SelectionState::Deleting => {}
                 }
@@ -930,7 +930,13 @@ impl App {
     }
 
     fn selection_up(&mut self) {
-        self.server_list.selected = self.server_list.selected.saturating_sub(1);
+        if self.server_list.selected == 0 {
+            self.server_list.selected =
+                Self::count_len(&self.server_list.servers).saturating_sub(1);
+            return;
+        }
+
+        self.server_list.selected -= 1;
 
         if self.server_list.scroll > self.server_list.selected {
             self.server_list.scroll = self.server_list.selected;
@@ -959,8 +965,12 @@ impl App {
     fn selection_down(&mut self) {
         let length = Self::count_len(&self.server_list.servers);
 
-        self.server_list.selected =
-            usize::min(self.server_list.selected + 1, length.saturating_sub(1));
+        if self.server_list.selected >= length.saturating_sub(1) {
+            self.server_list.selected = 0;
+            return;
+        }
+
+        self.server_list.selected += 1;
 
         let height_index = self.last_area.height.saturating_sub(3);
         let last_visible = self.server_list.scroll + height_index;
