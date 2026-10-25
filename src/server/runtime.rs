@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, sync::Arc};
+use std::{ffi::OsStr, panic, sync::Arc};
 
 use color_eyre::{
     Result,
@@ -52,11 +52,14 @@ async fn spawn_server_process(
 }
 
 async fn start_server(
-    config: &'static Config,
-    name: &str,
-    mut message_receiver: UnboundedReceiver<ServerInstruction>,
-    mut request_receiver: UnboundedReceiver<Request>,
-    sender: broadcast::Sender<Vec<u8>>,
+    Server {
+        config,
+        name,
+        message_receiver,
+        request_receiver,
+        sender,
+        ..
+    }: &mut Server,
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
@@ -132,6 +135,21 @@ async fn start_server(
     Ok(())
 }
 
+struct Server {
+    config: &'static Config,
+    name: String,
+    message_receiver: UnboundedReceiver<ServerInstruction>,
+    request_receiver: UnboundedReceiver<Request>,
+    sender: broadcast::Sender<Vec<u8>>,
+    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.server_communicators.remove(&self.name);
+    }
+}
+
 async fn server_lifecycle(
     config: &'static Config,
     name: String,
@@ -141,15 +159,23 @@ async fn server_lifecycle(
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<()> {
     println!("Starting {name}");
-    let res = start_server(config, &name, message_receiver, request_receiver, sender).await;
+
+    let mut server = Server {
+        config,
+        name,
+        message_receiver,
+        request_receiver,
+        sender,
+        server_communicators,
+    };
+
+    let res = start_server(&mut server).await;
 
     if let Err(err) = &res {
-        eprintln!("Server: {name} btwwwwww\n{err:?}");
+        eprintln!("Server: {} btwwwwww\n{err:?}", server.name);
     }
 
-    server_communicators.remove(&name);
-
-    println!("Server {name} closed");
+    println!("Server {} closed", server.name);
 
     res
 }
