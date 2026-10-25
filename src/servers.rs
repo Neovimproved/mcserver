@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use derive_more::Display;
 use miette::{Context, IntoDiagnostic};
 use tokio::fs::{self, DirEntry, ReadDir};
 
@@ -49,6 +50,14 @@ pub struct ServerObject {
     pub online: bool,
 }
 
+#[derive(Debug, Display)]
+pub enum ServerEntryType {
+    #[display("directory of servers")]
+    Group,
+    #[display("server")]
+    Object,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 pub enum ServerEntry {
     Group(ServerGroup),
@@ -60,6 +69,13 @@ impl ServerEntry {
         match self {
             ServerEntry::Group(server_group) => &server_group.name,
             ServerEntry::Object(server_object) => &server_object.name,
+        }
+    }
+
+    pub fn ty(&self) -> ServerEntryType {
+        match self {
+            ServerEntry::Group(_) => ServerEntryType::Group,
+            ServerEntry::Object(_) => ServerEntryType::Object,
         }
     }
 }

@@ -14,16 +14,18 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Style, Stylize},
-    text::{Line, Span, Text, ToLine, ToSpan},
+    style::{Color, Style, Stylize},
+    text::{Line, Span, ToLine, ToSpan},
     widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
+    fs,
     io::{self, AsyncReadExt, AsyncWriteExt},
     pin,
     time::{Sleep, sleep},
 };
 
+use super::state::{AbsoluteArea, Mode, SelectionState, ServerList, ServerState};
 use crate::{
     config::{self, Config, TerminalInterfaceConfig},
     line_buffer::LineBuffer,
@@ -32,73 +34,6 @@ use crate::{
     servers::{self, ServerEntry, ServerObject},
     write_message,
 };
-
-#[derive(Debug)]
-enum SelectionState {
-    Normal,
-    Adding { input: String },
-    Deleting,
-}
-
-impl SelectionState {
-    fn adding() -> Self {
-        Self::Adding {
-            input: "".to_string(),
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ServerState {
-    Normal,
-    Escaping,
-    Dead,
-}
-
-#[derive(Debug)]
-enum Mode {
-    Selecting(SelectionState),
-    Console {
-        attached_server: usize,
-        name: String,
-        input: String,
-        output: LineBuffer,
-        state: ServerState,
-    },
-}
-
-impl Mode {
-    fn output(index: usize, name: String) -> Self {
-        Self::Console {
-            attached_server: index,
-            name,
-            input: String::new(),
-            output: LineBuffer::new(),
-            state: ServerState::Normal,
-        }
-    }
-}
-
-struct ServerList {
-    servers: Vec<ServerEntry>,
-    selected: usize,
-    scroll: usize,
-}
-
-struct AbsoluteArea {
-    #[allow(dead_code)]
-    width: usize,
-    height: usize,
-}
-
-impl From<Rect> for AbsoluteArea {
-    fn from(Rect { width, height, .. }: Rect) -> Self {
-        Self {
-            width: width as usize,
-            height: height as usize,
-        }
-    }
-}
 
 pub struct App {
     config: Config,
@@ -189,30 +124,29 @@ impl App {
         &self.config.terminal_interface
     }
 
-    // returns the fully qualified server name if found
-    pub async fn try_select(&mut self, mut writer: impl AsyncWriteExt + Unpin) -> io::Result<()> {
+    fn get_selected_mut(
+        entries: &mut [ServerEntry],
+        selected: usize,
+    ) -> Option<(&mut ServerEntry, String)> {
         let mut counter = 0;
-        let mut name: Option<String> = None;
 
-        let mut iterators = vec![self.server_list.servers.iter_mut()];
+        let mut iterators = vec![entries.iter_mut()];
         let mut qualifier: Vec<&str> = vec![];
 
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
 
             for entry in back_iter {
-                if self.server_list.selected == counter {
-                    match entry {
-                        ServerEntry::Group(server_group) => {
-                            server_group.expanded = !server_group.expanded;
-                            return Ok(());
-                        }
-                        ServerEntry::Object(server_object) => {
-                            qualifier.push(&server_object.name);
-                            name = Some(qualifier.join("/"));
-                            break;
-                        }
-                    }
+                if selected == counter {
+                    let mut path = qualifier.iter().fold(String::new(), |mut acc, item| {
+                        acc.push_str(item);
+                        acc.push('/');
+                        acc
+                    });
+
+                    path.push_str(entry.name());
+
+                    return Some((entry, path));
                 }
 
                 counter += 1;
@@ -227,8 +161,39 @@ impl App {
                 }
             }
 
-            if name.is_some() {
-                break;
+            if exhausted {
+                iterators.pop();
+                qualifier.pop();
+            }
+        }
+
+        None
+    }
+
+    fn get_selected(entries: &[ServerEntry], selected: usize) -> Option<&ServerEntry> {
+        let mut counter = 0;
+
+        let mut iterators = vec![entries.iter()];
+        let mut qualifier: Vec<&str> = vec![];
+
+        while let Some(back_iter) = iterators.last_mut() {
+            let mut exhausted = true;
+
+            for entry in back_iter {
+                if selected == counter {
+                    return Some(entry);
+                }
+
+                counter += 1;
+
+                if let ServerEntry::Group(server_group) = entry
+                    && server_group.expanded
+                {
+                    qualifier.push(&server_group.name);
+                    iterators.push(server_group.children.iter());
+                    exhausted = false;
+                    break;
+                }
             }
 
             if exhausted {
@@ -237,13 +202,27 @@ impl App {
             }
         }
 
-        let Some(name) = name else {
-            return Ok(());
+        None
+    }
+
+    async fn try_select(&mut self, mut writer: impl AsyncWriteExt + Unpin) -> miette::Result<()> {
+        let Some((entry, path)) =
+            Self::get_selected_mut(&mut self.server_list.servers, self.server_list.selected)
+        else {
+            bail!("Failed to find entry {}", self.server_list.selected);
         };
 
-        write_message!(writer, ClientMessage::Attach { name: name.clone() }).await?;
+        match entry {
+            ServerEntry::Group(server_group) => server_group.expanded = !server_group.expanded,
+            ServerEntry::Object(server_object) => {
+                write_message!(writer, ClientMessage::Attach { name: path })
+                    .await
+                    .into_diagnostic()
+                    .wrap_err("Failed to send message")?;
 
-        self.mode = Mode::output(self.server_list.selected, name);
+                self.mode = Mode::output(self.server_list.selected, server_object.name.clone());
+            }
+        }
 
         Ok(())
     }
@@ -259,7 +238,6 @@ impl App {
                     KeyCode::Enter => self
                         .try_select(&mut writer)
                         .await
-                        .into_diagnostic()
                         .wrap_err("Failed to select item")?,
                     KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                     KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
@@ -279,7 +257,14 @@ impl App {
                     KeyCode::Char(ch) => match ch {
                         'a' => *selection_state = SelectionState::adding(),
 
-                        'D' => *selection_state = SelectionState::Deleting,
+                        'D' => {
+                            if let Some(entry) = Self::get_selected(
+                                &self.server_list.servers,
+                                self.server_list.selected,
+                            ) {
+                                *selection_state = SelectionState::deleting(entry);
+                            };
+                        }
 
                         // for debugging things
                         #[cfg(debug_assertions)]
@@ -299,20 +284,43 @@ impl App {
                     },
                     _ => {}
                 },
-                SelectionState::Adding { input } => match key.code {
-                    KeyCode::Esc => *selection_state = SelectionState::Normal,
+                SelectionState::Adding { name } => match key.code {
+                    KeyCode::Esc => selection_state.reset(),
                     KeyCode::Char(ch) => {
-                        input.push(ch);
+                        name.push(ch);
                         log!("Input received: {ch}");
                     }
                     // TODO: actually create the server here
-                    KeyCode::Enter => *selection_state = SelectionState::Normal,
+                    KeyCode::Enter => selection_state.reset(),
                     KeyCode::Backspace => {
-                        input.pop();
+                        name.pop();
                     }
                     _ => {}
                 },
-                SelectionState::Deleting => todo!(),
+                SelectionState::Deleting {
+                    name,
+                    confirmation,
+                    error_message,
+                    entry_type,
+                } => match key.code {
+                    KeyCode::Backspace => {
+                        confirmation.pop();
+                    }
+                    KeyCode::Enter => {
+                        if name == confirmation {
+                            fs::remove_dir_all(name)
+                                .await
+                                .into_diagnostic()
+                                .wrap_err("Failed to remove directory {}")?;
+                        } else {
+                            error_message.insert(format!("Failed to rename {entry_type}"));
+                        }
+                    }
+                    KeyCode::Delete => todo!(),
+                    KeyCode::Char(ch) => confirmation.push(ch),
+                    KeyCode::Esc => selection_state.reset(),
+                    _ => {}
+                },
             },
 
             Mode::Console {
@@ -326,34 +334,31 @@ impl App {
             },
 
             // Escaping output
-            Mode::Console { name, state, .. } if let ServerState::Escaping = state => {
-                match key.code {
-                    KeyCode::Backspace => todo!(),
-                    KeyCode::Enter => self
-                        .try_select(writer)
-                        .await
-                        .into_diagnostic()
-                        .wrap_err("Failed to attach to server")?,
-                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+            Mode::Console {
+                path: name, state, ..
+            } if let ServerState::Escaping = state => match key.code {
+                KeyCode::Backspace => todo!(),
+                KeyCode::Enter => self
+                    .try_select(writer)
+                    .await
+                    .wrap_err("Failed to attach to server")?,
+                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
-                    KeyCode::Tab => {
-                        *state = ServerState::Normal;
-                    }
+                KeyCode::Tab => state.reset(),
 
-                    KeyCode::BackTab => self.selection_mode(),
+                KeyCode::BackTab => self.selection_mode(),
 
-                    KeyCode::Char('q') => self.exit(),
+                KeyCode::Char('q') => self.exit(),
 
-                    KeyCode::Delete => todo!(),
-                    KeyCode::Insert => todo!(),
-                    KeyCode::F(_) => todo!(),
-                    KeyCode::Char(_) => todo!(),
-                    KeyCode::Null => todo!(),
-                    KeyCode::Esc => self.selection_mode(),
-                    _ => {}
-                }
-            }
+                KeyCode::Delete => todo!(),
+                KeyCode::Insert => todo!(),
+                KeyCode::F(_) => todo!(),
+                KeyCode::Char(_) => {}
+                KeyCode::Null => todo!(),
+                KeyCode::Esc => self.selection_mode(),
+                _ => {}
+            },
 
             Mode::Console { input, state, .. } => match key.code {
                 KeyCode::Backspace => {
@@ -625,7 +630,6 @@ impl App {
 
         self.try_select(&mut writer)
             .await
-            .into_diagnostic()
             .wrap_err_with(|| format!("Failed to attach to {name}"))?;
 
         self.run(terminal, (reader, writer)).await
@@ -659,20 +663,36 @@ impl App {
         attached: usize,
     ) {
         for (idx, entry) in entries.iter().enumerate() {
-            let mut indentation_span = if idx == entries.len().saturating_sub(1) {
-                format!("{base_indentation}└╴")
-            } else {
-                format!("{base_indentation}├╴")
-            };
+            const CONTINUATION: &str = "├╴";
+            const END: &str = "└╴";
 
-            let mut spans = if *counter == self.server_list.selected {
-                indentation_span = indentation_span.chars().skip(1).collect();
-                vec!["❯".to_span()]
-            } else {
-                vec![]
-            };
+            let mut spans = match (
+                *counter == self.server_list.selected,
+                idx == entries.len() - 1,
+            ) {
+                (true, last) => {
+                    let trimmed_indentation = if let Some(ch) = base_indentation.chars().next() {
+                        format!(
+                            "{}{}",
+                            &base_indentation[ch.len_utf8()..],
+                            if last { END } else { CONTINUATION }
+                        )
+                    } else {
+                        if last { END } else { CONTINUATION }
+                            .chars()
+                            .skip(1)
+                            .collect::<String>()
+                    };
 
-            spans.push(Span::from(indentation_span));
+                    vec!["❯".to_span(), Span::from(trimmed_indentation)]
+                }
+                (false, true) => {
+                    vec![Span::from(format!("{base_indentation}{END}"))]
+                }
+                (false, false) => {
+                    vec![Span::from(format!("{base_indentation}{CONTINUATION}"))]
+                }
+            };
 
             match entry {
                 ServerEntry::Group(server_group) => {
@@ -785,6 +805,9 @@ impl App {
         let mut output_lines = vec![];
         let mut current_line_utf8_length = 0;
 
+        // let mut state_machine = Parser::new();
+        // let mut logger = Log::new();
+
         let mut last_line = output
             .iter()
             // use skip here to get the maximum number of lines that might need to be used
@@ -867,19 +890,52 @@ impl App {
 
                 match selection_state {
                     SelectionState::Normal => {}
-                    SelectionState::Adding { input } => {
-                        log!("{input}");
-                        let add_block = Paragraph::new(if self.blinking {
-                            Text::from(format!("{input}█"))
-                        } else {
-                            Text::from(input.as_str())
-                        })
-                        .block(Block::bordered().title("Adding server"))
-                        .wrap(Wrap { trim: false });
+                    SelectionState::Adding { name } => {
+                        log!("{name}");
+                        let mut addition_text = format!("Name: {name}");
 
-                        frame.render_widget(add_block, Self::center_rect(frame_area, 40, 40));
+                        if self.blinking {
+                            addition_text.push('█');
+                        }
+
+                        let paragraph = Paragraph::new(addition_text)
+                            .block(Block::bordered().title("Adding server"))
+                            .wrap(Wrap { trim: false });
+
+                        frame.render_widget(paragraph, Self::center_rect(frame_area, 50, 40));
                     }
-                    SelectionState::Deleting => {}
+                    SelectionState::Deleting {
+                        name,
+                        confirmation,
+                        error_message,
+                        entry_type,
+                    } => {
+                        log!("{confirmation}");
+
+                        let mut deletion_text = format!(
+                            "Confirm you would like to delete the {entry_type} `{name}` by typing it out: {confirmation}"
+                        );
+
+                        if self.blinking {
+                            deletion_text.push('█');
+                        }
+
+                        let paragraph = Paragraph::new(deletion_text)
+                            .block(Block::bordered().title(
+                                if let Some(message) = error_message.get() {
+                                    Line::from(vec![
+                                        Span::from(format!("Deleting {entry_type}   ")),
+                                        message.to_span().red(),
+                                    ])
+                                } else {
+                                    Line::from(format!("Deleting {entry_type}"))
+                                },
+                            ))
+                            .wrap(Wrap { trim: false })
+                            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset));
+
+                        frame.render_widget(paragraph, Self::center_rect(frame.area(), 50, 40));
+                    }
                 }
             }
 

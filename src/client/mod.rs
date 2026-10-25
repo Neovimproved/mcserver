@@ -20,6 +20,8 @@ use tokio::{
 };
 
 mod app;
+mod log;
+mod state;
 mod types;
 
 use app::App;
