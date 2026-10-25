@@ -156,7 +156,9 @@ pub async fn try_connect_tcp(ip_addr: IpAddr) -> miette::Result<TcpStream> {
             Err(err) => match err.kind() {
                 io::ErrorKind::ConnectionRefused => {
                     spin_up_server_instance().await?;
-                    sleep(Duration::from_millis(100)).await;
+
+                    wait_for_server().await?;
+
                     TcpStream::connect(socket_addr).await
                 }
                 _ => Err(err),
