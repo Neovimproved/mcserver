@@ -1,5 +1,5 @@
 use std::{
-    ops::{self, Index, Range, RangeBounds},
+    ops::{self, Index, RangeBounds},
     time::{Duration, SystemTime},
 };
 
@@ -189,7 +189,7 @@ impl Lines {
         if added_width > self.max_width {
             self.buf.push('\n');
             self.markers.push(self.buf.len());
-            self.current_width = 0;
+            self.current_width = ch.len_utf8();
         } else {
             self.current_width = added_width;
         }
@@ -204,10 +204,10 @@ impl From<Lines> for String {
     }
 }
 
-impl Index<Range<usize>> for Lines {
+impl<R: RangeBounds<usize>> Index<R> for Lines {
     type Output = str;
 
-    fn index(&self, index: Range<usize>) -> &Self::Output {
+    fn index(&self, index: R) -> &Self::Output {
         let start_line = match index.start_bound() {
             ops::Bound::Included(n) => *n,
             ops::Bound::Excluded(n) => n + 1,
@@ -250,5 +250,50 @@ impl LineCache {
 
     pub fn set(&mut self, value: Lines) -> &mut Lines {
         self.buf.insert(value)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::iter::repeat_n;
+
+    use super::*;
+
+    #[test]
+    fn test_lines() -> miette::Result<()> {
+        let width_values = [1, 5, 10, 100];
+
+        for width in width_values {
+            let mut lines = Lines::new(width);
+
+            let mut simulated_lines = vec![];
+
+            for i in 0..10 {
+                let line = repeat_n((b'a' + i) as char, width);
+
+                if i == 9 {
+                    simulated_lines.push(line.clone().collect::<String>());
+                } else {
+                    simulated_lines.push(format!("{}\n", line.clone().collect::<String>()));
+                }
+                line.for_each(|ch| lines.push(ch));
+            }
+
+            for i in 0..10 {
+                for j in i..10 {
+                    let simulated_str: String = simulated_lines
+                        .iter()
+                        .enumerate()
+                        .skip(i)
+                        .map_while(|(idx, val)| if idx > j { None } else { Some(val) })
+                        .map(String::from)
+                        .collect();
+
+                    assert_eq!(simulated_str, lines[i..j + 1]);
+                }
+            }
+        }
+
+        Ok(())
     }
 }

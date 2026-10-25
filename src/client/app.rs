@@ -829,10 +829,7 @@ impl App {
             output_lines.push('█');
         }
 
-        log!(
-            "Last: `{}`",
-            &output_lines[output_lines.len() - 1..output_lines.len()]
-        );
+        log!("Last: `{}`", &output_lines[output_lines.len() - 1..]);
 
         let output_lines = line_cache.set(output_lines);
 
@@ -843,8 +840,7 @@ impl App {
         // 5, 6, 7, 8, 9
 
         log!("App getting");
-        let part =
-            &output_lines[line_count.saturating_sub(output_lines_available)..output_lines.len()];
+        let part = &output_lines[line_count.saturating_sub(output_lines_available)..];
 
         log!(
             "Actaul lines: {}",
