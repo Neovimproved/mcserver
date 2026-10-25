@@ -74,24 +74,35 @@ macro_rules! log_bytes {
     }};
 }
 
-fn readable_pretty(object: impl Debug) -> String {
+fn log_less_whitespace(object: impl Debug, f: impl Fn(usize) -> usize) {
     let s = format!("{object:#?}");
 
-    let mut transformed = s
-        .split('\n')
-        .map(|line| {
-            let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
-            &line[leading_spaces / 2..]
-        })
-        .fold(String::new(), |mut acc, item| {
-            acc.push_str(item);
-            acc.push('\n');
-            acc
-        });
+    let split = s.split('\n');
 
-    transformed.pop();
+    let mut trimmed = vec![];
 
-    transformed
+    split.for_each(|line| {
+        let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+        trimmed.push(&line[f(leading_spaces)..]);
+    });
+
+    let last = trimmed.len() - 1;
+
+    let transformed =
+        trimmed
+            .into_iter()
+            .enumerate()
+            .fold(String::new(), |mut acc, (idx, item)| {
+                acc.push_str(item);
+
+                if idx != last {
+                    acc.push('\n');
+                }
+
+                acc
+            });
+
+    log!("{transformed}");
 }
 
 impl App {
@@ -273,7 +284,7 @@ impl App {
                         // for debugging things
                         #[cfg(debug_assertions)]
                         'd' => {
-                            log!("{}", readable_pretty(&self.server_list.servers));
+                            log_less_whitespace(&self.server_list.servers, |n| n / 2);
                             log!("Position: {}", self.server_list.selected);
                         }
 
