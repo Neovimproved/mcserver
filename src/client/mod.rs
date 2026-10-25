@@ -77,6 +77,50 @@ async fn spin_up_server_instance() -> miette::Result<()> {
     Ok(())
 }
 
+pub async fn wait_for_server() -> miette::Result<()> {
+    let inotify = Inotify::init()
+        .into_diagnostic()
+        .wrap_err("Failed to initialize inotify instance")?;
+
+    inotify
+        .watches()
+        .add(TEMP_DIR, WatchMask::MODIFY | WatchMask::CREATE)
+        .into_diagnostic()
+        .wrap_err("Failed to add inotify watch")?;
+
+    let event_buffer = [0u8; 4096];
+
+    let mut event_stream = inotify
+        .into_event_stream(event_buffer)
+        .into_diagnostic()
+        .wrap_err("Failed to create event stream")?;
+
+    const TIMEOUT_SECS: u64 = 1;
+
+    let timeout = sleep(Duration::from_secs(TIMEOUT_SECS));
+    pin!(timeout);
+
+    loop {
+        select! {
+            _ = &mut timeout => {
+                bail!("Server timed out after {TIMEOUT_SECS} second");
+            }
+
+            event = event_stream.next() => {
+                let Some(event) = event else {
+                    bail!("Inotify event stream closed early");
+                };
+
+                let event = event.into_diagnostic().wrap_err("Failed to read event from inotify stream")?;
+
+                if let Some(name) = event.name && name == SOCKET_FILE_NAME {
+                    break Ok(());
+                }
+            }
+        }
+    }
+}
+
 pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
     let stream = match UnixStream::connect(SOCKET_PATH).await {
         Ok(stream) => stream,
@@ -85,45 +129,7 @@ pub async fn try_connect_unix_socket() -> miette::Result<UnixStream> {
                 // spin it up!! 🕸️
                 spin_up_server_instance().await?;
 
-                let inotify = Inotify::init()
-                    .into_diagnostic()
-                    .wrap_err("Failed to initialize inotify instance")?;
-
-                inotify
-                    .watches()
-                    .add(TEMP_DIR, WatchMask::MODIFY | WatchMask::CREATE)
-                    .into_diagnostic()
-                    .wrap_err("Failed to add inotify watch")?;
-
-                let event_buffer = [0u8; 4096];
-
-                let mut event_stream = inotify
-                    .into_event_stream(event_buffer)
-                    .into_diagnostic()
-                    .wrap_err("Failed to create event stream")?;
-
-                let timeout = sleep(Duration::from_secs(1));
-                pin!(timeout);
-
-                loop {
-                    select! {
-                        _ = &mut timeout => {
-                            bail!("Server timed out after 1 second");
-                        }
-
-                        event = event_stream.next() => {
-                            let Some(event) = event else {
-                                bail!("Inotify event stream closed early");
-                            };
-
-                            let event = event.into_diagnostic().wrap_err("Failed to read event from inotify stream")?;
-
-                            if let Some(name) = event.name && name == SOCKET_FILE_NAME {
-                                break;
-                            }
-                        }
-                    }
-                }
+                wait_for_server().await?;
 
                 UnixStream::connect(SOCKET_PATH)
                     .await
