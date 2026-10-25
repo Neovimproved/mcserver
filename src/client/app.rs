@@ -331,7 +331,9 @@ impl App {
                             error_message.insert(format!("Failed to rename {entry_type}"));
                         }
                     }
-                    KeyCode::Delete => todo!(),
+                    KeyCode::Delete => todo!(
+                        "Delete char is not yet implemented in deletion mode yet unfortunately"
+                    ),
                     KeyCode::Char(ch) => confirmation.push(ch),
                     KeyCode::Esc => selection_state.reset(),
                     _ => {}
@@ -352,7 +354,7 @@ impl App {
             Mode::Console {
                 path: name, state, ..
             } if let ConnectionState::Escaping = state => match key.code {
-                KeyCode::Backspace => todo!(),
+                // KeyCode::Backspace => todo!(),
                 KeyCode::Enter => self
                     .try_select(writer)
                     .await
@@ -364,13 +366,15 @@ impl App {
 
                 KeyCode::BackTab => self.selection_mode(),
 
+                // KeyCode::Delete => todo!(),
+                // KeyCode::Insert => todo!(),
+                // KeyCode::F(_) => todo!(),
                 KeyCode::Char('q') => self.exit(),
 
-                KeyCode::Delete => todo!(),
-                KeyCode::Insert => todo!(),
-                KeyCode::F(_) => todo!(),
-                KeyCode::Char(_) => {}
-                KeyCode::Null => todo!(),
+                KeyCode::Char(':') => {
+                    // TODO: implement commands
+                }
+
                 KeyCode::Esc => self.selection_mode(),
                 _ => {}
             },
@@ -390,8 +394,6 @@ impl App {
                     .into_diagnostic()
                     .wrap_err("Failed to send input to the server")?
                 }
-                KeyCode::Left => todo!("Implement cursor left"),
-                KeyCode::Right => todo!("Implement cursor right"),
                 KeyCode::Tab => write_message!(writer, ClientMessage::ProgramInput(vec![b'\t']))
                     .await
                     .into_diagnostic()
@@ -399,8 +401,6 @@ impl App {
                 KeyCode::BackTab => {
                     *state = ConnectionState::Escaping;
                 }
-                KeyCode::Delete => todo!("Implement deletion"),
-                // KeyCode::F(_) => todo!(),
                 KeyCode::Char(ch) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
                         write_message!(
@@ -649,6 +649,7 @@ impl App {
 
             self.run(terminal, (reader, writer)).await
         } else {
+            // TODO: implement optional server arg..
             todo!("Implement optional server arg")
         }
     }
@@ -926,8 +927,6 @@ impl App {
                         error_message,
                         entry_type,
                     } => {
-                        log!("{confirmation}");
-
                         let mut deletion_text = format!(
                             "Confirm you would like to delete the {entry_type} `{name}` by typing it out: {confirmation}"
                         );
