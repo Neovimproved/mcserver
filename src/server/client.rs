@@ -153,7 +153,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
         let history = rx.await.unwrap_or_else(|err| {
             LineBuffer::from(vec![
-                format!("Falied to produce history: {err:?}\n").into_bytes(),
+                format!("Failed to produce history: {err:?}\n").into_bytes(),
             ])
         });
 
