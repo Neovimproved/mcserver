@@ -2,8 +2,7 @@ use std::{
     collections::HashSet,
     fmt::Debug,
     future::{Pending, pending},
-    io::IsTerminal,
-    iter, mem,
+    mem,
     pin::Pin,
 };
 
@@ -15,7 +14,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Span, ToLine, ToSpan},
+    text::{Line, Span, ToSpan},
     widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
@@ -25,7 +24,9 @@ use tokio::{
     time::{Sleep, sleep},
 };
 
-use super::state::{AbsoluteArea, ConnectionState, Mode, SelectionState, ServerList};
+use super::state::{
+    AbsoluteArea, ConnectionState, LineCache, Lines, Mode, SelectionState, ServerList,
+};
 use crate::{
     config::{self, Config, TerminalInterfaceConfig},
     line_buffer::LineBuffer,
@@ -49,6 +50,9 @@ pub struct App {
 #[macro_export]
 macro_rules! log {
     ($($arg:tt)*) => {{
+        #[cfg(debug_assertions)]
+        use std::io::IsTerminal;
+
         #[cfg(debug_assertions)]
         if !std::io::stderr().is_terminal() {
             eprintln!($($arg)*);
@@ -450,8 +454,6 @@ impl App {
                 }
             }
         }
-
-        // log!("{}", online_servers.len());
     }
 
     pub async fn read_message(
@@ -543,8 +545,9 @@ impl App {
             }
 
             if redraw {
+                let mut line_cache = LineCache::new();
                 terminal
-                    .draw(|frame| self.last_area = self.render(frame))
+                    .draw(|frame| self.last_area = self.render(frame, &mut line_cache))
                     .into_diagnostic()
                     .wrap_err("Failed to render tui")?;
             }
@@ -796,71 +799,73 @@ impl App {
             .block(Block::new().title("Servers").borders(Borders::ALL))
     }
 
-    fn draw_output_widget(
+    fn draw_output_widget<'a>(
         &self,
         output_area: AbsoluteArea,
         input: &str,
         output: &LineBuffer,
-    ) -> List<'_> {
+        line_cache: &'a mut LineCache,
+    ) -> Paragraph<'a> {
         // TODO: use a f terminal thing
         let output_text_width = output_area.width.saturating_sub(2);
         let output_lines_available = output_area.height.saturating_sub(2);
 
-        let mut output_lines = vec![];
-        let mut current_line_utf8_length = 0;
+        let mut output_lines = Lines::new(output_text_width);
 
         // let mut state_machine = Parser::new();
         // let mut logger = Log::new();
 
-        let mut last_line = output
+        output
             .iter()
             // use skip here to get the maximum number of lines that might need to be used
             // Then, the lines that aren't used will simply not be rendered
             .skip(output.len().saturating_sub(output_lines_available))
             .map(String::as_str)
-            .chain(iter::once(input))
-            .fold(String::new(), |mut acc, item| {
-                for ch in item.chars() {
-                    if ch == '\n' {
-                        output_lines.push(Line::from(acc));
-                        acc = String::new();
-                        current_line_utf8_length = 0;
-                        continue;
-                    }
+            .for_each(|line| line.chars().for_each(|ch| output_lines.push(ch)));
 
-                    let new_length = current_line_utf8_length + ch.len_utf8();
+        input.chars().for_each(|ch| output_lines.push(ch));
 
-                    if new_length > output_text_width {
-                        output_lines.push(Line::from(acc));
-                        acc = ch.to_string();
-                        current_line_utf8_length = 0;
-                    } else {
-                        acc.push(ch);
-                        current_line_utf8_length = new_length;
-                    }
-                }
-
-                acc
-            });
-
-        if !self.blinking {
-            output_lines.push(Line::from(last_line));
-        } else if current_line_utf8_length + 1 >= output_text_width {
-            output_lines.push(Line::from(last_line));
-            output_lines.push('█'.to_line());
-        } else {
-            last_line.push('█');
-            output_lines.push(Line::from(last_line));
+        if self.blinking {
+            output_lines.push('█');
         }
+
+        log!(
+            "Last: `{}`",
+            &output_lines[output_lines.len() - 1..output_lines.len()]
+        );
+
+        let output_lines = line_cache.set(output_lines);
 
         let line_count = output_lines.len();
 
-        List::new(
-            output_lines
-                .into_iter()
-                .skip(line_count.saturating_sub(output_lines_available)),
-        )
-        .block(Block::new().title("Console").borders(Borders::ALL))
+        // end: 10
+        // available: 5
+        // 5, 6, 7, 8, 9
+
+        log!("App getting");
+        let part =
+            &output_lines[line_count.saturating_sub(output_lines_available)..output_lines.len()];
+
+        log!(
+            "Actaul lines: {}",
+            part.chars()
+                .fold(0usize, |n, ch| if ch == '\n' { n + 1 } else { n })
+        );
+
+        log!("Markers: {:?}", output_lines.markers());
+
+        log!("Pairs of things: {}", output_lines_available);
+
+        log!(
+            "Last few chars: `{:?}`",
+            part.chars()
+                .rev()
+                .enumerate()
+                .map_while(|(idx, val)| if idx > 3 { None } else { Some(val) })
+                .collect::<Vec<char>>()
+        );
+
+        Paragraph::new(part).block(Block::new().title("Console").borders(Borders::ALL))
     }
 
     fn center_rect(area: Rect, x_percent: u16, y_percent: u16) -> Rect {
@@ -879,7 +884,7 @@ impl App {
         horizontal_layout[1]
     }
 
-    fn render(&self, frame: &mut Frame) -> AbsoluteArea {
+    fn render(&self, frame: &mut Frame, output_cache: &mut LineCache) -> AbsoluteArea {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
 
@@ -961,7 +966,8 @@ impl App {
                     frame.area()
                 };
 
-                let widget = self.draw_output_widget(output_area.into(), input, output);
+                let widget =
+                    self.draw_output_widget(output_area.into(), input, output, output_cache);
 
                 frame.render_widget(widget, output_area);
             }

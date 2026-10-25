@@ -1,9 +1,13 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    ops::{self, Index, Range, RangeBounds},
+    time::{Duration, SystemTime},
+};
 
 use ratatui::layout::Rect;
 
 use crate::{
     line_buffer::LineBuffer,
+    log,
     servers::{ServerEntry, ServerEntryType},
 };
 
@@ -143,5 +147,108 @@ impl From<Rect> for AbsoluteArea {
             width: width as usize,
             height: height as usize,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Lines {
+    buf: String,
+    markers: Vec<usize>,
+    max_width: usize,
+    current_width: usize,
+}
+
+impl Lines {
+    pub fn new(max_width: usize) -> Self {
+        Self {
+            buf: String::new(),
+            markers: vec![0],
+            max_width,
+            current_width: 0,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.markers.len()
+    }
+
+    pub fn markers(&self) -> &[usize] {
+        &self.markers
+    }
+
+    pub fn push(&mut self, ch: char) {
+        if ch == '\n' {
+            self.buf.push('\n');
+            self.markers.push(self.buf.len());
+            self.current_width = 0;
+            return;
+        }
+
+        let added_width = self.current_width + ch.len_utf8();
+
+        if added_width > self.max_width {
+            self.buf.push('\n');
+            self.markers.push(self.buf.len());
+            self.current_width = 0;
+        } else {
+            self.current_width = added_width;
+        }
+
+        self.buf.push(ch);
+    }
+}
+
+impl From<Lines> for String {
+    fn from(value: Lines) -> Self {
+        value.buf
+    }
+}
+
+impl Index<Range<usize>> for Lines {
+    type Output = str;
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        let start_line = match index.start_bound() {
+            ops::Bound::Included(n) => *n,
+            ops::Bound::Excluded(n) => n + 1,
+            ops::Bound::Unbounded => 0,
+        };
+
+        log!(
+            "{:?} compared to length: {}",
+            index.end_bound(),
+            self.markers.len()
+        );
+
+        let end_line = match index.end_bound() {
+            ops::Bound::Included(n) => n + 1,
+            ops::Bound::Excluded(n) => *n,
+            ops::Bound::Unbounded => self.markers.len(),
+        };
+
+        log!("{start_line}, {end_line} (delta {})", end_line - start_line);
+
+        let start = self.markers[start_line];
+        let end = if end_line == self.markers.len() {
+            self.buf.len()
+        } else {
+            self.markers[end_line]
+        };
+
+        &self.buf[start..end]
+    }
+}
+
+pub struct LineCache {
+    buf: Option<Lines>,
+}
+
+impl LineCache {
+    pub fn new() -> Self {
+        Self { buf: None }
+    }
+
+    pub fn set(&mut self, value: Lines) -> &mut Lines {
+        self.buf.insert(value)
     }
 }
