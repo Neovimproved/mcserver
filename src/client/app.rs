@@ -25,7 +25,7 @@ use tokio::{
     time::{Sleep, sleep},
 };
 
-use super::state::{AbsoluteArea, Mode, SelectionState, ServerList, ServerState};
+use super::state::{AbsoluteArea, ConnectionState, Mode, SelectionState, ServerList};
 use crate::{
     config::{self, Config, TerminalInterfaceConfig},
     line_buffer::LineBuffer,
@@ -324,7 +324,7 @@ impl App {
             },
 
             Mode::Console {
-                state: ServerState::Dead,
+                state: ConnectionState::Dead,
                 ..
             } => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::BackTab => {
@@ -336,7 +336,7 @@ impl App {
             // Escaping output
             Mode::Console {
                 path: name, state, ..
-            } if let ServerState::Escaping = state => match key.code {
+            } if let ConnectionState::Escaping = state => match key.code {
                 KeyCode::Backspace => todo!(),
                 KeyCode::Enter => self
                     .try_select(writer)
@@ -382,7 +382,7 @@ impl App {
                     .into_diagnostic()
                     .wrap_err("Failed to send tab to server")?,
                 KeyCode::BackTab => {
-                    *state = ServerState::Escaping;
+                    *state = ConnectionState::Escaping;
                 }
                 KeyCode::Delete => todo!("Implement deletion"),
                 // KeyCode::F(_) => todo!(),
@@ -399,7 +399,7 @@ impl App {
                     }
                 }
                 KeyCode::Esc => {
-                    *state = ServerState::Escaping;
+                    *state = ConnectionState::Escaping;
                 }
                 _ => {}
             },
@@ -481,7 +481,7 @@ impl App {
             ServerMessage::Closed => {
                 if let Mode::Console { input, state, .. } = &mut self.mode {
                     *input = "Press enter to return...".to_string();
-                    *state = ServerState::Dead;
+                    *state = ConnectionState::Dead;
                 }
             }
             ServerMessage::Message(message) => {
@@ -621,18 +621,22 @@ impl App {
         &mut self,
         terminal: &mut DefaultTerminal,
         (reader, mut writer): (impl AsyncReadExt + Unpin, impl AsyncWriteExt + Unpin),
-        name: String,
+        name: Option<String>,
     ) -> miette::Result<()> {
-        let pos = Self::find_server_and_expand(&name, &mut self.server_list.servers, "", 0)
-            .wrap_err_with(|| format!("{name} could not be found"))?;
+        if let Some(name) = name {
+            let pos = Self::find_server_and_expand(&name, &mut self.server_list.servers, "", 0)
+                .wrap_err_with(|| format!("{name} could not be found"))?;
 
-        self.server_list.selected = pos;
+            self.server_list.selected = pos;
 
-        self.try_select(&mut writer)
-            .await
-            .wrap_err_with(|| format!("Failed to attach to {name}"))?;
+            self.try_select(&mut writer)
+                .await
+                .wrap_err_with(|| format!("Failed to attach to {name}"))?;
 
-        self.run(terminal, (reader, writer)).await
+            self.run(terminal, (reader, writer)).await
+        } else {
+            todo!("Implement optional server arg")
+        }
     }
 
     fn find_first_online(children: &[ServerEntry]) -> Option<&ServerObject> {
@@ -945,7 +949,7 @@ impl App {
                 state,
                 ..
             } => {
-                let output_area = if matches!(state, ServerState::Escaping) {
+                let output_area = if matches!(state, ConnectionState::Escaping) {
                     let main_sections =
                         Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                             .split(frame.area());

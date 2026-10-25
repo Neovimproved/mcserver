@@ -89,13 +89,13 @@ impl SelectionState {
 }
 
 #[derive(Debug)]
-pub enum ServerState {
+pub enum ConnectionState {
     Normal,
     Escaping,
     Dead,
 }
 
-impl ServerState {
+impl ConnectionState {
     pub fn reset(&mut self) {
         *self = Self::Normal;
     }
@@ -109,7 +109,7 @@ pub enum Mode {
         path: String,
         input: String,
         output: LineBuffer,
-        state: ServerState,
+        state: ConnectionState,
     },
 }
 
@@ -120,7 +120,7 @@ impl Mode {
             path,
             input: String::new(),
             output: LineBuffer::new(),
-            state: ServerState::Normal,
+            state: ConnectionState::Normal,
         }
     }
 }

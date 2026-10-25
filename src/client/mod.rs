@@ -163,7 +163,19 @@ pub async fn try_connect_tcp(ip_addr: IpAddr) -> miette::Result<TcpStream> {
     .wrap_err("Failed to connect to TCP stream")
 }
 
-pub fn start(ip_addr: Option<IpAddr>, server_arg: Option<String>) -> miette::Result<()> {
+#[derive(Debug)]
+pub enum StartState {
+    Unattached,
+    Attached(Option<String>),
+}
+
+impl From<Option<String>> for StartState {
+    fn from(value: Option<String>) -> Self {
+        Self::Attached(value)
+    }
+}
+
+pub fn start(ip_addr: Option<IpAddr>, server_arg: StartState) -> miette::Result<()> {
     let runtime = Runtime::new()
         .into_diagnostic()
         .wrap_err("Failed to create client runtime")?;
@@ -178,20 +190,21 @@ pub fn start(ip_addr: Option<IpAddr>, server_arg: Option<String>) -> miette::Res
         if let Some(ip_addr) = ip_addr {
             let mut stream = try_connect_tcp(ip_addr).await?;
 
-            if let Some(server_arg) = server_arg {
-                app.run_attached(&mut terminal, stream.split(), server_arg)
-                    .await
-            } else {
-                app.run(&mut terminal, stream.split()).await
+            match server_arg {
+                StartState::Attached(name) => {
+                    app.run_attached(&mut terminal, stream.split(), name).await
+                }
+
+                StartState::Unattached => app.run(&mut terminal, stream.split()).await,
             }
         } else {
             let mut stream = try_connect_unix_socket().await?;
 
-            if let Some(server_arg) = server_arg {
-                app.run_attached(&mut terminal, stream.split(), server_arg)
-                    .await
-            } else {
-                app.run(&mut terminal, stream.split()).await
+            match server_arg {
+                StartState::Attached(name) => {
+                    app.run_attached(&mut terminal, stream.split(), name).await
+                }
+                StartState::Unattached => app.run(&mut terminal, stream.split()).await,
             }
         }
     })

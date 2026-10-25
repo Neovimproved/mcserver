@@ -9,6 +9,7 @@ use tokio::runtime::Runtime;
 
 use crate::{
     args::{Args, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
+    client::StartState,
     consts::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
     servers::ServerGroup,
@@ -108,17 +109,11 @@ fn main() -> miette::Result<()> {
     }
 
     let Some(command) = args.command else {
-        return client::start(args.tcp, None);
+        return client::start(args.tcp, StartState::Unattached);
     };
 
     match command {
-        Command::Attach { server } => {
-            if let Some(server) = server {
-                client::start(args.tcp, Some(server.into()))
-            } else {
-                Ok(())
-            }
-        }
+        Command::Attach { server } => client::start(args.tcp, server.map(String::from).into()),
         Command::Tree => tree(),
     }
 }
