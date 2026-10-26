@@ -50,7 +50,7 @@ pub struct ServerObject {
     pub online: bool,
 }
 
-#[derive(Debug, Display)]
+#[derive(Clone, Copy, Debug, Display)]
 pub enum ServerEntryType {
     #[display("directory of servers")]
     Group,
