@@ -8,14 +8,14 @@ use miette::{Context, IntoDiagnostic, bail};
 use tokio::runtime::Runtime;
 
 use crate::{
-    args::{Args, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
+    cli::{Cli, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
     client::StartState,
     consts::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
     servers::ServerGroup,
 };
 
-mod args;
+mod cli;
 mod client;
 mod config;
 mod consts;
@@ -95,7 +95,7 @@ fn tree() -> miette::Result<()> {
 }
 
 fn main() -> miette::Result<()> {
-    let args = Args::parse();
+    let args = Cli::parse();
 
     if let Some(option) = args.server {
         return server(match option.as_str() {
