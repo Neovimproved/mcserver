@@ -211,8 +211,12 @@ impl ReadFrame {
                 )
             })
     }
+}
 
-    async fn try_into_group(self) -> miette::Result<ServerGroup> {
+impl TryInto<ServerGroup> for ReadFrame {
+    type Error = miette::Error;
+
+    fn try_into(self) -> Result<ServerGroup, Self::Error> {
         Ok(ServerGroup {
             name: Path::new(
                 self.path
@@ -274,9 +278,7 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
         frame.entries.sort_unstable();
 
         if let Some(parent) = frames.last_mut() {
-            parent
-                .entries
-                .push(ServerEntry::Group(frame.try_into_group().await?));
+            parent.entries.push(ServerEntry::Group(frame.try_into()?));
         } else {
             break Ok(frame.entries);
         }
