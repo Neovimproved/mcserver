@@ -58,7 +58,7 @@ async fn start_server(
         message_receiver,
         request_receiver,
         sender,
-        ..
+        server_communicators,
     }: &mut Server,
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
@@ -66,6 +66,10 @@ async fn start_server(
     let (mut pty, mut child) = spawn_server_process(config, name, &config.default_java_args)
         .await
         .wrap_err("Failed to spawn server process")?;
+
+    let _ = sender.send(bitcode::encode(&make_synchronization_payload(
+        server_communicators,
+    )));
 
     let mut stdout_finished = false;
 
@@ -135,6 +139,17 @@ async fn start_server(
     Ok(())
 }
 
+pub fn make_synchronization_payload(
+    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+) -> ServerMessage {
+    ServerMessage::SynchronizationPayload {
+        online_servers: server_communicators
+            .iter()
+            .map(|pair| pair.key().clone())
+            .collect(),
+    }
+}
+
 struct Server {
     config: &'static Config,
     name: String,
@@ -147,6 +162,9 @@ struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.server_communicators.remove(&self.name);
+
+        let message = make_synchronization_payload(&self.server_communicators);
+        let _ = self.sender.send(bitcode::encode(&message));
     }
 }
 

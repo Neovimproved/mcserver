@@ -15,7 +15,7 @@ use crate::{
     messages::{ClientMessage, ServerInstruction, ServerMessage},
     read_message,
     server::{
-        runtime::initialize_server,
+        runtime::{initialize_server, make_synchronization_payload},
         types::{Request, ServerCommunicator},
     },
     write_bytes, write_message,
@@ -52,13 +52,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     async fn send_synchronization_payload(&mut self) -> Result<()> {
-        let message = ServerMessage::SynchronizationPayload {
-            online_servers: self
-                .server_communicators
-                .iter()
-                .map(|pair| pair.key().clone())
-                .collect(),
-        };
+        let message = make_synchronization_payload(&self.server_communicators);
 
         let writer = &mut self.writer;
         write_message!(writer, message)
@@ -93,7 +87,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         }
     }
 
-    async fn handle_message(
+    async fn handle_attached_message(
         &mut self,
         size: usize,
         message_sender: &UnboundedSender<ServerInstruction>,
@@ -192,7 +186,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
                         Err(err) => return Err(err).wrap_err("Failed to read message size"),
                     };
 
-                    if let Some(action) = self.handle_message(size, &message_sender).await? {
+                    if let Some(action) = self.handle_attached_message(size, &message_sender).await? {
                         break action;
                     }
                 }
