@@ -25,18 +25,10 @@ pub struct TempMessage<T = String> {
     duration: Duration,
 }
 
-#[allow(unused)]
 impl<T> TempMessage<T> {
     pub fn new(duration: Duration) -> Self {
         Self {
             message: None,
-            duration,
-        }
-    }
-
-    pub fn with_message(message: T, duration: Duration) -> Self {
-        Self {
-            message: Some((SystemTime::now(), message)),
             duration,
         }
     }
@@ -52,16 +44,7 @@ impl<T> TempMessage<T> {
     }
 
     pub fn insert(&mut self, message: T) {
-        self.message.insert((SystemTime::now(), message));
-    }
-
-    pub fn set_duration(&mut self, duration: Duration) {
-        self.duration = duration;
-    }
-
-    pub fn insert_with_duration(&mut self, message: T, duration: Duration) {
-        self.message.insert((SystemTime::now(), message));
-        self.duration = duration;
+        self.message.replace((SystemTime::now(), message));
     }
 }
 
@@ -101,6 +84,7 @@ impl AddingField {
 }
 
 #[derive(Clone, Copy, Debug, Display)]
+#[allow(dead_code)]
 pub enum ServerSoftware {
     #[display("Fabric")]
     Fabric,
@@ -115,6 +99,7 @@ pub enum ServerSoftware {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub struct Version {
     pub major: usize,
     pub minor: usize,
@@ -122,6 +107,7 @@ pub struct Version {
 }
 
 #[derive(Debug, Display, Error, From)]
+#[allow(dead_code)]
 pub enum ParseVersionError {
     #[display("{_0}")]
     ParseIntError(ParseIntError),
@@ -251,7 +237,6 @@ pub struct ServerList {
 }
 
 pub struct AbsoluteArea {
-    #[allow(dead_code)]
     pub width: usize,
     pub height: usize,
 }
@@ -273,7 +258,6 @@ pub struct Lines {
     current_width: usize,
 }
 
-#[allow(dead_code)]
 impl Lines {
     pub fn new(max_width: usize) -> Self {
         Self {
@@ -286,10 +270,6 @@ impl Lines {
 
     pub fn len(&self) -> usize {
         self.markers.len()
-    }
-
-    pub fn markers(&self) -> &[usize] {
-        &self.markers
     }
 
     pub fn push(&mut self, ch: char) {

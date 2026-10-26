@@ -63,12 +63,12 @@ async fn start_server(
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
-    let (mut pty, mut child) = spawn_server_process(config, &name, &config.default_java_args)
+    let (mut pty, mut child) = spawn_server_process(config, name, &config.default_java_args)
         .await
         .wrap_err("Failed to spawn server process")?;
 
     let _ = sender.send(bitcode::encode(&make_synchronization_payload(
-        &server_communicators,
+        server_communicators,
     )));
 
     let mut stdout_finished = false;

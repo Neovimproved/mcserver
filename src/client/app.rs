@@ -317,9 +317,8 @@ impl App {
                     // TODO: actually create the server here
                     KeyCode::Enter => {
                         if field.next() {
-                            todo!();
-                            #[allow(unreachable_code)]
                             selection_state.reset();
+                            todo!();
                         }
                     }
                     KeyCode::Tab => {

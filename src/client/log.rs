@@ -1,4 +1,4 @@
-#![allow(unused)]
+#![allow(dead_code)]
 
 use ratatui::text::Span;
 use vte::Perform;
