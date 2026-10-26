@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, panic, sync::Arc};
+use std::{borrow::Cow, ffi::OsStr, panic, sync::Arc};
 
 use color_eyre::{
     Result,
@@ -63,12 +63,12 @@ async fn start_server(
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
-    let (mut pty, mut child) = spawn_server_process(config, name, &config.default_java_args)
+    let (mut pty, mut child) = spawn_server_process(config, &name, &config.default_java_args)
         .await
         .wrap_err("Failed to spawn server process")?;
 
     let _ = sender.send(bitcode::encode(&make_synchronization_payload(
-        server_communicators,
+        &server_communicators,
     )));
 
     let mut stdout_finished = false;
@@ -163,8 +163,11 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.server_communicators.remove(&self.name);
 
-        let message = make_synchronization_payload(&self.server_communicators);
-        let _ = self.sender.send(bitcode::encode(&message));
+        let _ = self
+            .sender
+            .send(bitcode::encode(&make_synchronization_payload(
+                &self.server_communicators,
+            )));
     }
 }
 
@@ -193,9 +196,17 @@ async fn server_lifecycle(
         eprintln!("Server: {} btwwwwww\n{err:?}", server.name);
     }
 
-    println!("Server {} closed", server.name);
+    metadata::update_last_used(Cow::Owned(metadata::dir(&server.name)))
+        .await
+        .wrap_err("Failed to update metadata")?;
 
-    res
+    if let Err(err) = &res {
+        eprintln!("Server {} ended with error\n{err:?}", server.name);
+    } else {
+        println!("Server {} closed", server.name);
+    }
+
+    Ok(())
 }
 
 pub async fn initialize_server(

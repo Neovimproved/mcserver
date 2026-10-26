@@ -73,7 +73,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             };
 
             match message {
-                ClientMessage::Attach { name } => break Ok(ServeAction::Attach(name)),
+                ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
                 ClientMessage::SynchronizationRequest => {
                     self.send_synchronization_payload().await?
@@ -103,7 +103,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         let message: ClientMessage = read_message!(reader, size).await?;
 
         let action = match message {
-            ClientMessage::Attach { name } => Some(ServeAction::Attach(name)),
+            ClientMessage::Attach { server } => Some(ServeAction::Attach(server)),
             ClientMessage::Detach => Some(ServeAction::Prompt),
             ClientMessage::Kill => {
                 message_sender

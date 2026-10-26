@@ -24,16 +24,17 @@ use tokio::{
     time::{Sleep, sleep},
 };
 
-use super::state::{
-    AbsoluteArea, ConnectionState, LineCache, Lines, Mode, SelectionState, ServerList,
-};
 use crate::{
+    client::state::{
+        AbsoluteArea, AddingField, ConnectionState, Lines, Mode, SelectionState, ServerList,
+        TempMessage,
+    },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry, ServerObject},
+    servers::{self, ServerEntry, ServerEntryType, ServerObject},
     write_message,
 };
 
@@ -231,7 +232,7 @@ impl App {
         match entry {
             ServerEntry::Group(server_group) => server_group.expanded = !server_group.expanded,
             ServerEntry::Object(server_object) => {
-                write_message!(writer, ClientMessage::Attach { name: path })
+                write_message!(writer, ClientMessage::Attach { server: path })
                     .await
                     .into_diagnostic()
                     .wrap_err("Failed to send message")?;
@@ -300,16 +301,40 @@ impl App {
                     },
                     _ => {}
                 },
-                SelectionState::Adding { name } => match key.code {
+                SelectionState::Adding {
+                    name,
+                    version,
+                    server_software,
+                    field,
+                } => match key.code {
                     KeyCode::Esc => selection_state.reset(),
-                    KeyCode::Char(ch) => {
-                        name.push(ch);
-                        log!("Input received: {ch}");
+                    KeyCode::Char(ch) => match field {
+                        AddingField::Name => name,
+                        AddingField::Version => version,
+                        AddingField::Software => server_software,
                     }
+                    .push(ch),
                     // TODO: actually create the server here
-                    KeyCode::Enter => selection_state.reset(),
+                    KeyCode::Enter => {
+                        if field.next() {
+                            todo!();
+                            #[allow(unreachable_code)]
+                            selection_state.reset();
+                        }
+                    }
+                    KeyCode::Tab => {
+                        field.next();
+                    }
+                    KeyCode::BackTab => {
+                        field.prev();
+                    }
                     KeyCode::Backspace => {
-                        name.pop();
+                        match field {
+                            AddingField::Name => name,
+                            AddingField::Version => version,
+                            AddingField::Software => server_software,
+                        }
+                        .pop();
                     }
                     _ => {}
                 },
@@ -557,9 +582,8 @@ impl App {
             }
 
             if redraw {
-                let mut line_cache = LineCache::new();
                 terminal
-                    .draw(|frame| self.last_area = self.render(frame, &mut line_cache))
+                    .draw(|frame| self.last_area = self.render(frame))
                     .into_diagnostic()
                     .wrap_err("Failed to render tui")?;
             }
@@ -817,7 +841,6 @@ impl App {
         output_area: AbsoluteArea,
         input: &str,
         output: &LineBuffer,
-        line_cache: &'a mut LineCache,
     ) -> Paragraph<'a> {
         // TODO: use a f terminal thing
         let output_text_width = output_area.width.saturating_sub(2);
@@ -842,39 +865,11 @@ impl App {
             output_lines.push(CURSOR_CHAR);
         }
 
-        log!("Last: `{}`", &output_lines[output_lines.len() - 1..]);
+        let vscroll = output_lines.len().saturating_sub(output_lines_available);
 
-        let output_lines = line_cache.set(output_lines);
-
-        let line_count = output_lines.len();
-
-        // end: 10
-        // available: 5
-        // 5, 6, 7, 8, 9
-
-        log!("App getting");
-        let part = &output_lines[line_count.saturating_sub(output_lines_available)..];
-
-        log!(
-            "Actaul lines: {}",
-            part.chars()
-                .fold(0usize, |n, ch| if ch == '\n' { n + 1 } else { n })
-        );
-
-        log!("Markers: {:?}", output_lines.markers());
-
-        log!("Pairs of things: {}", output_lines_available);
-
-        log!(
-            "Last few chars: `{:?}`",
-            part.chars()
-                .rev()
-                .enumerate()
-                .map_while(|(idx, val)| if idx > 3 { None } else { Some(val) })
-                .collect::<Vec<char>>()
-        );
-
-        Paragraph::new(part).block(Block::new().title("Console").borders(Borders::ALL))
+        Paragraph::new(output_lines.into_buf())
+            .block(Block::new().title("Console").borders(Borders::ALL))
+            .scroll((vscroll as u16, 0))
     }
 
     fn center_rect(area: Rect, x_percent: u16, y_percent: u16) -> Rect {
@@ -893,6 +888,31 @@ impl App {
         horizontal_layout[1]
     }
 
+    fn draw_addition_widget(
+        &self,
+        name: &str,
+        version: &str,
+        server_software: &str,
+        field: AddingField,
+    ) -> List<'_> {
+        // let mut lines = vec![];
+        let mut addition_text = format!("Name: {name}");
+        let mut version_text = format!("Version: {version}");
+        let mut server_software_text = format!("Server: {server_software}");
+
+        if self.blinking {
+            match field {
+                AddingField::Name => &mut addition_text,
+                AddingField::Version => &mut version_text,
+                AddingField::Software => &mut server_software_text,
+            }
+            .push(CURSOR_CHAR)
+        }
+
+        List::new([addition_text, version_text, server_software_text])
+            .block(Block::bordered().title("Adding server"))
+    }
+
     fn draw_deletion_widget<'a>(
         &self,
         name: &str,
@@ -908,7 +928,7 @@ impl App {
             deletion_text.push(CURSOR_CHAR);
         }
 
-        let paragraph = Paragraph::new(deletion_text)
+        Paragraph::new(deletion_text)
             .block(
                 Block::bordered().title(if let Some(message) = error_message.get() {
                     Line::from(vec![
@@ -920,12 +940,10 @@ impl App {
                 }),
             )
             .wrap(Wrap { trim: false })
-            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset));
-
-        paragraph
+            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset))
     }
 
-    fn render(&self, frame: &mut Frame, output_cache: &mut LineCache) -> AbsoluteArea {
+    fn render(&self, frame: &mut Frame) -> AbsoluteArea {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
 
@@ -940,20 +958,15 @@ impl App {
 
                 match selection_state {
                     SelectionState::Normal => {}
-                    SelectionState::Adding { name } => {
-                        log!("{name}");
-                        let mut addition_text = format!("Name: {name}");
-
-                        if self.blinking {
-                            addition_text.push('█');
-                        }
-
-                        let paragraph = Paragraph::new(addition_text)
-                            .block(Block::bordered().title("Adding server"))
-                            .wrap(Wrap { trim: false });
-
-                        frame.render_widget(paragraph, Self::center_rect(frame_area, 50, 40));
-                    }
+                    SelectionState::Adding {
+                        name,
+                        version,
+                        server_software,
+                        field,
+                    } => frame.render_widget(
+                        self.draw_addition_widget(name, version, server_software, *field),
+                        Self::center_rect(frame.area(), 50, 40),
+                    ),
                     SelectionState::Deleting {
                         name,
                         confirmation,
@@ -984,8 +997,7 @@ impl App {
                     frame.area()
                 };
 
-                let widget =
-                    self.draw_output_widget(output_area.into(), input, output, output_cache);
+                let widget = self.draw_output_widget(output_area.into(), input, output);
 
                 frame.render_widget(widget, output_area);
             }

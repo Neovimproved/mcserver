@@ -22,11 +22,8 @@ use tokio::{
 mod app;
 mod log;
 mod state;
-mod types;
 
 use app::App;
-
-pub use types::ServerArgument;
 
 use crate::consts::{CONNECTION_PORT, SOCKET_FILE_NAME, SOCKET_PATH, TEMP_DIR};
 

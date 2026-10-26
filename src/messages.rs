@@ -88,8 +88,8 @@ pub enum ServerMessage {
 
 #[derive(Debug, Decode, Display, Encode)]
 pub enum ClientMessage {
-    #[display("Attach to server {name}")]
-    Attach { name: String },
+    #[display("Attach to server {server}")]
+    Attach { server: String },
 
     #[display("Detach from the current server")]
     Detach,

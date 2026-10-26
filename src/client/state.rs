@@ -1,8 +1,11 @@
 use std::{
+    num::ParseIntError,
     ops::{self, Index, RangeBounds},
+    str::FromStr,
     time::{Duration, SystemTime},
 };
 
+use derive_more::{Display, Error, From};
 use ratatui::layout::Rect;
 
 use crate::{
@@ -10,6 +13,11 @@ use crate::{
     log,
     servers::{ServerEntry, ServerEntryType},
 };
+
+// Order:
+// inherent impls
+// owning/consuming
+// borrowing/referencing
 
 #[derive(Debug)]
 pub struct TempMessage<T = String> {
@@ -57,11 +65,115 @@ impl<T> TempMessage<T> {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum AddingField {
+    Name,
+    Version,
+    Software,
+}
+
+impl AddingField {
+    pub fn prev(&mut self) -> bool {
+        *self = match self {
+            AddingField::Name => {
+                *self = AddingField::Software;
+                return true;
+            }
+            AddingField::Version => AddingField::Name,
+            AddingField::Software => AddingField::Version,
+        };
+
+        false
+    }
+
+    pub fn next(&mut self) -> bool {
+        *self = match self {
+            AddingField::Name => AddingField::Version,
+            AddingField::Version => AddingField::Software,
+            AddingField::Software => {
+                *self = AddingField::Name;
+                return true;
+            }
+        };
+
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug, Display)]
+pub enum ServerSoftware {
+    #[display("Fabric")]
+    Fabric,
+    #[display("Forge")]
+    Forge,
+    #[display("NeoForge")]
+    NeoForge,
+    #[display("Paper")]
+    Paper,
+    Purpur,
+    Vanilla,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Version {
+    pub major: usize,
+    pub minor: usize,
+    pub patch: Option<usize>,
+}
+
+#[derive(Debug, Display, Error, From)]
+pub enum ParseVersionError {
+    #[display("{_0}")]
+    ParseIntError(ParseIntError),
+
+    #[display("No major version was found")]
+    NoMajor,
+
+    #[display("No minor version was found")]
+    NoMinor,
+
+    #[display("Malformed version (received trailing period)")]
+    Malformed,
+}
+
+impl FromStr for Version {
+    type Err = ParseVersionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let period = s.find('.').ok_or(ParseVersionError::NoMajor)?;
+
+        let major = s[..period].parse()?;
+
+        let remaining = s.get(period + 1..).ok_or(ParseVersionError::NoMinor)?;
+
+        let (minor, patch) = if let Some(period) = remaining.find('.') {
+            let minor = remaining[..period].parse()?;
+            let patch = remaining
+                .get(period + 1..)
+                .ok_or(ParseVersionError::Malformed)?
+                .parse()?;
+
+            (minor, Some(patch))
+        } else {
+            (remaining.parse()?, None)
+        };
+
+        Ok(Self {
+            major,
+            minor,
+            patch,
+        })
+    }
+}
+
 #[derive(Debug)]
 pub enum SelectionState {
     Normal,
     Adding {
         name: String,
+        version: String,
+        server_software: String,
+        field: AddingField,
     },
     Deleting {
         name: String,
@@ -78,7 +190,10 @@ impl SelectionState {
 
     pub fn adding() -> Self {
         Self::Adding {
-            name: "".to_string(),
+            name: String::new(),
+            version: String::new(),
+            server_software: String::new(),
+            field: AddingField::Name,
         }
     }
 
@@ -158,6 +273,7 @@ pub struct Lines {
     current_width: usize,
 }
 
+#[allow(dead_code)]
 impl Lines {
     pub fn new(max_width: usize) -> Self {
         Self {
@@ -196,11 +312,9 @@ impl Lines {
 
         self.buf.push(ch);
     }
-}
 
-impl From<Lines> for String {
-    fn from(value: Lines) -> Self {
-        value.buf
+    pub fn into_buf(self) -> String {
+        self.buf
     }
 }
 
@@ -236,20 +350,6 @@ impl<R: RangeBounds<usize>> Index<R> for Lines {
         };
 
         &self.buf[start..end]
-    }
-}
-
-pub struct LineCache {
-    buf: Option<Lines>,
-}
-
-impl LineCache {
-    pub fn new() -> Self {
-        Self { buf: None }
-    }
-
-    pub fn set(&mut self, value: Lines) -> &mut Lines {
-        self.buf.insert(value)
     }
 }
 
