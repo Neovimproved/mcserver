@@ -892,6 +892,38 @@ impl App {
         horizontal_layout[1]
     }
 
+    fn draw_deletion_widget<'a>(
+        &self,
+        name: &str,
+        confirmation: &str,
+        error_message: &'a TempMessage<String>,
+        entry_type: ServerEntryType,
+    ) -> Paragraph<'a> {
+        let mut deletion_text = format!(
+            "Confirm you would like to delete the {entry_type} `{name}` by typing it out: {confirmation}"
+        );
+
+        if self.blinking {
+            deletion_text.push('█');
+        }
+
+        let paragraph = Paragraph::new(deletion_text)
+            .block(
+                Block::bordered().title(if let Some(message) = error_message.get() {
+                    Line::from(vec![
+                        Span::from(format!("Deleting {entry_type}   ")),
+                        message.to_span().red(),
+                    ])
+                } else {
+                    Line::from(format!("Deleting {entry_type}"))
+                }),
+            )
+            .wrap(Wrap { trim: false })
+            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset));
+
+        paragraph
+    }
+
     fn render(&self, frame: &mut Frame, output_cache: &mut LineCache) -> AbsoluteArea {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
@@ -926,31 +958,10 @@ impl App {
                         confirmation,
                         error_message,
                         entry_type,
-                    } => {
-                        let mut deletion_text = format!(
-                            "Confirm you would like to delete the {entry_type} `{name}` by typing it out: {confirmation}"
-                        );
-
-                        if self.blinking {
-                            deletion_text.push('█');
-                        }
-
-                        let paragraph = Paragraph::new(deletion_text)
-                            .block(Block::bordered().title(
-                                if let Some(message) = error_message.get() {
-                                    Line::from(vec![
-                                        Span::from(format!("Deleting {entry_type}   ")),
-                                        message.to_span().red(),
-                                    ])
-                                } else {
-                                    Line::from(format!("Deleting {entry_type}"))
-                                },
-                            ))
-                            .wrap(Wrap { trim: false })
-                            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset));
-
-                        frame.render_widget(paragraph, Self::center_rect(frame.area(), 50, 40));
-                    }
+                    } => frame.render_widget(
+                        self.draw_deletion_widget(name, confirmation, error_message, *entry_type),
+                        Self::center_rect(frame.area(), 50, 40),
+                    ),
                 }
             }
 
