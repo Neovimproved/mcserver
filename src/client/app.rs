@@ -29,6 +29,7 @@ use super::state::{
 };
 use crate::{
     config::{self, Config, TerminalInterfaceConfig},
+    consts::CURSOR_CHAR,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
@@ -838,7 +839,7 @@ impl App {
         input.chars().for_each(|ch| output_lines.push(ch));
 
         if self.blinking {
-            output_lines.push('█');
+            output_lines.push(CURSOR_CHAR);
         }
 
         log!("Last: `{}`", &output_lines[output_lines.len() - 1..]);
@@ -904,7 +905,7 @@ impl App {
         );
 
         if self.blinking {
-            deletion_text.push('█');
+            deletion_text.push(CURSOR_CHAR);
         }
 
         let paragraph = Paragraph::new(deletion_text)

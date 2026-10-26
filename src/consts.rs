@@ -28,3 +28,6 @@ pub const CONFIG_FILE_VARIABLE: &str = "MCSERVER_CONFIG_FILE";
 pub const METADATA_DIRECTORY: &str = ".mcserver";
 pub const JAR_FILE_NAME: &str = "jar_file.txt";
 pub const LAST_USED_FILE_NAME: &str = "last_used.bin";
+
+//
+pub const CURSOR_CHAR: char = '█';
