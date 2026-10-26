@@ -225,9 +225,8 @@ pub async fn read() -> Result<(Config, Option<KdlDocument>)> {
 mod test {
     use miette::{Context, IntoDiagnostic};
 
-    use crate::test_utils::tempdir_init;
-
     use super::*;
+    use crate::test_utils::tempdir_init;
 
     enum Last {
         Backslash,
@@ -235,59 +234,62 @@ mod test {
         Normal,
     }
 
+    fn fold_to_kdl((idx, ch): (usize, char), last: &mut Last, mut acc: String, s: &str) -> String {
+        if (idx == 0 || idx == s.len() - 1) && ch == '"' {
+            return acc;
+        }
+
+        match last {
+            Last::Backslash => {
+                match ch {
+                    'n' => acc.push('\n'),
+                    'r' => acc.push('\r'),
+                    't' => acc.push('\t'),
+                    '\\' => acc.push('\\'),
+                    '"' => acc.push('"'),
+                    // backspace
+                    'b' => acc.push('\x08'),
+                    'f' => acc.push('\x0C'),
+                    's' => acc.push(' '),
+                    'u' => {
+                        *last = Last::Unicode("".to_string());
+                        return acc;
+                    }
+                    _ => unreachable!("Invalid escape seq"),
+                }
+                *last = Last::Normal;
+            }
+            Last::Unicode(s) => match ch {
+                '{' => {}
+                '0'..='9' => s.push(ch),
+                'a'..='f' | 'A'..='F' => s.push(ch),
+                '}' => {
+                    acc.push(
+                        char::from_u32(u32::from_str_radix(s, 16).expect("Failed to parse"))
+                            .expect("Invalid utf-8 char"),
+                    );
+                    *last = Last::Normal;
+                }
+                _ => unreachable!("Idiot failed at push kdl string"),
+            },
+            Last::Normal => match ch {
+                '\\' => {
+                    *last = Last::Backslash;
+                }
+                _ => acc.push(ch),
+            },
+        }
+
+        acc
+    }
+
     fn parse_kdl_str(s: &str) -> String {
         let mut last = Last::Normal;
 
         s.chars()
             .enumerate()
-            .fold(String::with_capacity(s.len() / 2), |mut acc, (idx, ch)| {
-                if (idx == 0 || idx == s.len() - 1) && ch == '"' {
-                    return acc;
-                }
-
-                match &mut last {
-                    Last::Backslash => {
-                        match ch {
-                            'n' => acc.push('\n'),
-                            'r' => acc.push('\r'),
-                            't' => acc.push('\t'),
-                            '\\' => acc.push('\\'),
-                            '"' => acc.push('"'),
-                            // backspace
-                            'b' => acc.push('\x08'),
-                            'f' => acc.push('\x0C'),
-                            's' => acc.push(' '),
-                            'u' => {
-                                last = Last::Unicode("".to_string());
-                                return acc;
-                            }
-                            _ => unreachable!("Invalid escape seq"),
-                        }
-                        last = Last::Normal;
-                    }
-                    Last::Unicode(s) => match ch {
-                        '{' => {}
-                        '0'..='9' => s.push(ch),
-                        'a'..='f' | 'A'..='F' => s.push(ch),
-                        '}' => {
-                            acc.push(
-                                char::from_u32(
-                                    u32::from_str_radix(s, 16).expect("Failed to parse"),
-                                )
-                                .expect("Invalid utf-8 char"),
-                            );
-                            last = Last::Normal;
-                        }
-                        _ => unreachable!("Idiot failed at push kdl string"),
-                    },
-                    Last::Normal => match ch {
-                        '\\' => {
-                            last = Last::Backslash;
-                        }
-                        _ => acc.push(ch),
-                    },
-                }
-                acc
+            .fold(String::with_capacity(s.len() / 2), |acc, item| {
+                fold_to_kdl(item, &mut last, acc, s)
             })
     }
 
