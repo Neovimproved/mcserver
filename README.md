@@ -30,6 +30,10 @@ environment.systemPackages = [
 ]
 ```
 
+## Usage
+
+Run `mcserver` in your terminal and you may start servers by pressing space. Ensure that you have some Minecraft servers in your servers directory, which is ~/Servers/ by default. Also, you should create a .mcserver directory inside of your server and put a file called jar_file.txt in it, which contains the file name of the server jar.
+
 ## Configuration
 
 Create a file `config.kdl` in a configuration directory (e.g. `$XDG_CONFIG_HOME/mcserver/` or just `~/.config/mcserver/` which is probably the same). [KDL](https://kdl.dev/) is a relatively new configuration language that solves many of the pitfalls that come with things like json and yaml.
