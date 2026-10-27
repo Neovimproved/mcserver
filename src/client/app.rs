@@ -3,11 +3,13 @@ use std::{
     fmt::Debug,
     future::{Pending, pending},
     mem,
+    path::{Path, PathBuf},
     pin::Pin,
 };
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
+use inotify::{Inotify, WatchMask};
 use kdl::KdlDocument;
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
@@ -31,6 +33,7 @@ use crate::{
     },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
+    error::display_path,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
@@ -40,9 +43,9 @@ use crate::{
 
 pub struct App {
     config: Config,
+    document: KdlDocument,
+    config_file: PathBuf,
     mode: Mode,
-    #[allow(dead_code)]
-    document: Option<KdlDocument>,
     server_list: ServerList,
     last_area: AbsoluteArea,
     blinking: bool,
@@ -109,7 +112,7 @@ fn log_less_whitespace(object: impl Debug, f: impl Fn(usize) -> usize) {
 
 impl App {
     pub async fn try_new() -> miette::Result<Self> {
-        let (config, document) = config::read()
+        let (config, document, config_file) = config::read()
             .await
             .into_diagnostic()
             .wrap_err("Failed to create/read config")?;
@@ -118,9 +121,13 @@ impl App {
 
         let servers = servers::read(config.servers_directory.as_ref()).await?;
 
+        let blinking = config.terminal_interface.cursor_blink.is_some();
+
         Ok(Self {
             config,
             document,
+            config_file,
+            mode: Mode::Selecting(SelectionState::Normal),
             server_list: ServerList {
                 servers,
                 selected: 0usize,
@@ -131,8 +138,7 @@ impl App {
                 width: 80,
                 height: 24,
             },
-            mode: Mode::Selecting(SelectionState::Normal),
-            blinking: true,
+            blinking,
             exiting: false,
         })
     }
@@ -553,6 +559,27 @@ impl App {
         Ok(())
     }
 
+    fn create_dir_event_stream(
+        dir: impl AsRef<Path>,
+    ) -> miette::Result<inotify::EventStream<[u8; 4096]>> {
+        let inotify = Inotify::init()
+            .into_diagnostic()
+            .wrap_err("Failed to create inotify instance")?;
+
+        inotify
+            .watches()
+            .add(dir, WatchMask::MODIFY | WatchMask::CREATE | WatchMask::MOVE)
+            .into_diagnostic()
+            .wrap_err("Failed to add watch on config to inotify instance")?;
+
+        let event_stream = inotify
+            .into_event_stream([0u8; 4096])
+            .into_diagnostic()
+            .wrap_err("Failed to create inotify event stream for config file")?;
+
+        Ok(event_stream)
+    }
+
     pub async fn run(
         &mut self,
         terminal: &mut DefaultTerminal,
@@ -569,6 +596,31 @@ impl App {
         pin!(blink_event);
 
         let mut redraw = true;
+
+        let config_dir = self
+            .config_file
+            .parent()
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to get parent of config file ({})",
+                    display_path(&self.config_file)
+                )
+            })?
+            .to_path_buf();
+
+        let config_file_name = self
+            .config_file
+            .file_name()
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to get file name of config path ({})",
+                    display_path(&self.config_file)
+                )
+            })?
+            .to_os_string();
+
+        let mut config_dir_event_stream = Self::create_dir_event_stream(&config_dir)
+            .wrap_err("Failed to create config directory event stream")?;
 
         loop {
             if self.exiting {
@@ -617,6 +669,35 @@ impl App {
                     self.read_message(&mut reader, length).await?;
                     true
                 },
+
+                event = config_dir_event_stream.next() => {
+                    let Some(event) = event else {
+                        config_dir_event_stream = Self::create_dir_event_stream(&config_dir).wrap_err("Failed to recreate config directory event stream")?;
+                        continue;
+                    };
+
+                    let event = event.into_diagnostic().wrap_err("Failed to read inotify event")?;
+
+                    let Some(name) = event.name else {
+                        log!("Nameless event");
+                        continue;
+                    };
+
+                    if name != config_file_name {
+                        continue;
+                    }
+
+                    let Ok((config, document)) = config::read_file(&self.config_file).await else {
+                        log!("Erroneous config file contents");
+                        // program should not crash at this point
+                        continue;
+                    };
+
+                    self.config = config;
+                    self.document = document;
+
+                    true
+                }
             };
         }
     }

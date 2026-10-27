@@ -85,10 +85,8 @@ pub async fn wait_for_server() -> miette::Result<()> {
         .into_diagnostic()
         .wrap_err("Failed to add inotify watch")?;
 
-    let event_buffer = [0u8; 4096];
-
     let mut event_stream = inotify
-        .into_event_stream(event_buffer)
+        .into_event_stream([0u8; 4096])
         .into_diagnostic()
         .wrap_err("Failed to create event stream")?;
 

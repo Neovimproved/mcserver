@@ -19,8 +19,8 @@ pub const MAX_MESSAGE_LENGTH: usize = 1024 * 1024;
 
 // Config
 
-pub const CONFIG_DIRECTORY_NAME: &str = "mcserver";
-pub const CONFIG_FILE_NAME: &str = "config.kdl";
+pub const DEFAULT_CONFIG_DIRECTORY: &str = "mcserver";
+pub const DEFAULT_CONFIG_FILE_NAME: &str = "config.kdl";
 pub const CONFIG_FILE_VARIABLE: &str = "MCSERVER_CONFIG_FILE";
 
 // Metadata

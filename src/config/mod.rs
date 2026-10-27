@@ -14,7 +14,7 @@ use ratatui::style::Color;
 use tokio::{fs, io};
 
 use crate::{
-    consts::{CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, CONFIG_FILE_VARIABLE},
+    consts::{CONFIG_FILE_VARIABLE, DEFAULT_CONFIG_DIRECTORY, DEFAULT_CONFIG_FILE_NAME},
     error::{Error, Result},
 };
 
@@ -183,7 +183,7 @@ impl Defaults {
 }
 
 impl Config {
-    pub fn try_default() -> Result<Self> {
+    pub fn try_new() -> Result<Self> {
         Ok(Self {
             default_java_args: Default::default(),
             servers_directory: ServersDirectory::from_str(Defaults::SERVERS_DIRECTORY)?,
@@ -194,31 +194,44 @@ impl Config {
     }
 }
 
+impl TryFrom<&KdlDocument> for Config {
+    type Error = Error;
+
+    fn try_from(value: &KdlDocument) -> Result<Self> {
+        parse_config(value)
+    }
+}
+
 fn get_file_path() -> Result<PathBuf> {
     let mut config_path = dirs::config_dir().ok_or(Error::ConfigDirectoryNotFound)?;
-    config_path.extend([CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME]);
+    config_path.extend([DEFAULT_CONFIG_DIRECTORY, DEFAULT_CONFIG_FILE_NAME]);
     Ok(config_path)
 }
 
-async fn read_file(file_path: &Path) -> Result<(Config, Option<KdlDocument>)> {
+pub async fn read_file(file_path: &Path) -> Result<(Config, KdlDocument)> {
     match fs::read_to_string(file_path).await {
         Ok(contents) => {
             let document = KdlDocument::parse(&contents)?;
-            let config = parse_config(&document)?;
+            let config = Config::try_from(&document)?;
 
-            Ok((config, Some(document)))
+            Ok((config, (document)))
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((Config::try_default()?, None)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            Ok((Config::try_new()?, KdlDocument::new()))
+        }
         Err(err) => Err(err.into()),
     }
 }
 
-pub async fn read() -> Result<(Config, Option<KdlDocument>)> {
-    read_file(&match env::var_os(CONFIG_FILE_VARIABLE) {
+pub async fn read() -> Result<(Config, KdlDocument, PathBuf)> {
+    let config_file = match env::var_os(CONFIG_FILE_VARIABLE) {
         Some(var) => PathBuf::from(var),
         None => get_file_path()?,
-    })
-    .await
+    };
+
+    let (config, document) = read_file(&config_file).await?;
+
+    Ok((config, document, config_file))
 }
 
 #[cfg(test)]
@@ -297,7 +310,7 @@ mod test {
     async fn test_read_file() -> miette::Result<()> {
         let dir = tempdir_init()?;
 
-        let config_path = dir.path().join(CONFIG_FILE_NAME);
+        let config_path = dir.path().join(DEFAULT_CONFIG_FILE_NAME);
 
         let java_args = [
             "\"-Xms1G\"",
