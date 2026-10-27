@@ -1,6 +1,6 @@
 [package]
 name = "mcserver"
-version = "0.3.10"
+version = "0.3.11"
 edition = "2024"
 description = "Minecraft server multiplexer"
 license = "MIT"

@@ -1179,7 +1179,7 @@ dependencies = [
 
 [[package]]
 name = "mcserver"
-version = "0.3.10"
+version = "0.3.11"
 dependencies = [
  "bitcode",
  "clap",
