@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     select,
-    sync::{broadcast, mpsc::UnboundedSender, oneshot},
+    sync::{Mutex, broadcast, mpsc::UnboundedSender, oneshot},
 };
 
 use crate::{
@@ -30,7 +30,7 @@ enum ServeAction {
 pub struct Client<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> {
     reader: R,
     writer: W,
-    config: &'static Config,
+    config: &'static Mutex<Config>,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 
     action: ServeAction,
@@ -39,7 +39,7 @@ pub struct Client<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> {
 impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     pub fn new(
         (reader, writer): (R, W),
-        config: &'static Config,
+        config: &'static Mutex<Config>,
         server_communicators: Arc<DashMap<String, ServerCommunicator>>,
     ) -> Self {
         Self {

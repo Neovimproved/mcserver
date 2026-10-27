@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ffi::OsStr, panic, sync::Arc};
+use std::{borrow::Cow, panic, sync::Arc};
 
 use color_eyre::{
     Result,
@@ -13,7 +13,7 @@ use tokio::{
     process::Child,
     select,
     sync::{
-        broadcast,
+        Mutex, broadcast,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     },
 };
@@ -31,19 +31,29 @@ use crate::{
 };
 
 async fn spawn_server_process(
-    config: &'static Config,
+    config: &'static Mutex<Config>,
     name: &str,
-    flags: &[impl AsRef<OsStr>],
+    additional_flags: &[String],
 ) -> Result<(Pty, Child)> {
     let (pty, pts) = pty_process::open()?;
     pty.resize(pty_process::Size::new(24, 80))?;
 
-    let server_dir = config.servers_directory.path.join(name);
+    let config_lock = config.lock().await;
+
+    let server_dir = config_lock.servers_directory.path.join(name);
+
+    let flags = if additional_flags.is_empty() {
+        Cow::Borrowed(&config_lock.default_java_args)
+    } else {
+        let mut flags = config_lock.default_java_args.clone();
+        flags.extend_from_slice(additional_flags);
+        Cow::Owned(flags)
+    };
 
     let child = Command::new("java")
         .arg("-jar")
         .arg(metadata::get_jar_file(server_dir.clone()).await?)
-        .args(flags)
+        .args(flags.as_ref())
         .current_dir(server_dir)
         .spawn(pts)?;
 
@@ -63,7 +73,8 @@ async fn start_server(
 ) -> Result<()> {
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
-    let (mut pty, mut child) = spawn_server_process(config, name, &config.default_java_args)
+    // TODO: allow additional flags
+    let (mut pty, mut child) = spawn_server_process(config, name, &[])
         .await
         .wrap_err("Failed to spawn server process")?;
 
@@ -151,7 +162,7 @@ pub fn make_synchronization_payload(
 }
 
 struct Server {
-    config: &'static Config,
+    config: &'static Mutex<Config>,
     name: String,
     message_receiver: UnboundedReceiver<ServerInstruction>,
     request_receiver: UnboundedReceiver<Request>,
@@ -172,7 +183,7 @@ impl Drop for Server {
 }
 
 async fn server_lifecycle(
-    config: &'static Config,
+    config: &'static Mutex<Config>,
     name: String,
     message_receiver: UnboundedReceiver<ServerInstruction>,
     request_receiver: UnboundedReceiver<Request>,
@@ -210,7 +221,7 @@ async fn server_lifecycle(
 }
 
 pub async fn initialize_server(
-    config: &'static Config,
+    config: &'static Mutex<Config>,
     name: String,
     server_communicators: Arc<DashMap<String, ServerCommunicator>>,
 ) -> Result<(
@@ -250,9 +261,9 @@ pub async fn initialize_server(
 }
 
 pub async fn main() -> Result<()> {
-    let config: &'static Config = Box::leak(Box::new(
+    let config: &'static Mutex<Config> = Box::leak(Box::new(Mutex::new(
         config::read().await.wrap_err("Failed to read config")?.0,
-    ));
+    )));
 
     if let Err(err) = fs::remove_file(SOCKET_PATH).await
         && err.kind() != io::ErrorKind::NotFound
