@@ -29,28 +29,27 @@ pub fn display_path(path: &Path) -> String {
 
 #[derive(Debug, Display, Error, From)]
 pub enum Error {
-    #[display("{_0}")]
     AddressParse(AddrParseError),
 
-    #[display("{_0}")]
     Bitcode(bitcode::Error),
+
+    #[display("File name of path `{}` could not be found", display_path(_0))]
+    #[from(ignore)]
+    FileNameNotFound(#[error(not(source))] PathBuf),
 
     #[display("Home directory was not found")]
     HomeDirectoryNotFound,
 
-    #[display("{_0}")]
     Io(io::Error),
 
-    #[display("{_0}")]
     KdlParse(KdlError),
 
-    #[display("{_0}")]
     Lookup(LookupError<VarError>),
 
-    #[display("{_0}")]
     Metadata(MetadataError),
 
     #[display("`{}` could not be converted to string", display_path(_0))]
+    #[from(ignore)]
     NonUtf8Path(#[error(not(source))] PathBuf),
 
     #[display("Connection type {_0} is not supported")]
@@ -59,7 +58,6 @@ pub enum Error {
     #[display("Config directory was not found")]
     ConfigDirectoryNotFound,
 
-    #[display("{_0}")]
     ParseConfig(ParseConfigError),
 }
 

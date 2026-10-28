@@ -13,7 +13,6 @@ use super::{
 
 #[derive(Debug, Display)]
 pub enum ParseConfigErrorKind {
-    #[display("{_0}")]
     Color(ParseColorError),
 
     #[display("Structure of value is wrong")]

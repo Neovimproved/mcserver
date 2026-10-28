@@ -22,13 +22,11 @@ pub enum MetadataError {
     )]
     DirectoryNotFound(#[error(not(source))] PathBuf),
 
-    #[display("{_0}")]
     Io(io::Error),
 
     #[display("Failed to read jar file ({}) with error: {_1}", display_path(_0))]
     JarFileRead(PathBuf, io::Error),
 
-    #[display("{_0}")]
     SystemTime(SystemTimeError),
 }
 

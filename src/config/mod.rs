@@ -19,6 +19,9 @@ use crate::{
 };
 
 mod parser;
+mod watcher;
+
+pub use watcher::Watch;
 
 pub use parser::ParseConfigError;
 use parser::parse_config;

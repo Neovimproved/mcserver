@@ -2,10 +2,9 @@ use std::{borrow::Cow, panic};
 
 use color_eyre::{
     Result,
-    eyre::{Context, ContextCompat, eyre},
+    eyre::{Context, eyre},
 };
 use dashmap::DashMap;
-use inotify::{Inotify, WatchMask};
 use pty_process::{Command, Pty};
 use tokio::{
     fs,
@@ -22,7 +21,6 @@ use tokio::{
 use crate::{
     config::{self, Config},
     consts::{LOCAL_TCP_ADDR, SOCKET_PATH},
-    error::display_path,
     line_buffer::LineBuffer,
     messages::{ServerInstruction, ServerMessage},
     metadata,
@@ -285,17 +283,8 @@ pub async fn main() -> Result<()> {
     let mut stdin_finished = false;
     let mut stdin_reader = BufReader::new(io::stdin());
 
-    let inotify = Inotify::init().wrap_err("Failed to initialize inotify instance")?;
-
-    inotify.watches().add(
-        config_path.parent().wrap_err_with(|| {
-            format!(
-                "Failed to get parent of config path ({})",
-                display_path(&config_path)
-            )
-        })?,
-        WatchMask::MODIFY | WatchMask::CREATE,
-    )?;
+    let mut config_watch = config::Watch::<4096>::try_new(config_path.clone())
+        .wrap_err("Failed to create config watch")?;
 
     loop {
         select! {
@@ -341,6 +330,27 @@ pub async fn main() -> Result<()> {
                         break;
                     }
                     _ => eprintln!("I don't understand"),
+                }
+            }
+
+            res = config_watch.next() => {
+                let Some(res) = res else {
+                    config_watch.restore().wrap_err("Failed to restore config watch")?;
+                    continue;
+                };
+
+                if let Err(err) = res {
+                    eprintln!("Failed to read from config watch with err: {err:?}");
+                    continue;
+                }
+
+                match config::read_file(&config_path).await {
+                    Ok((new_config, _)) => {
+                        *config.write().await = new_config;
+                    },
+                    Err(err) => {
+                        eprintln!("Invalid config file: {err:?}");
+                    }
                 }
             }
         };

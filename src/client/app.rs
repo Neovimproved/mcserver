@@ -3,13 +3,12 @@ use std::{
     fmt::Debug,
     future::{Pending, pending},
     mem,
-    path::{Path, PathBuf},
+    path::PathBuf,
     pin::Pin,
 };
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
-use inotify::{Inotify, WatchMask};
 use kdl::KdlDocument;
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
@@ -559,27 +558,6 @@ impl App {
         Ok(())
     }
 
-    fn create_dir_event_stream(
-        dir: impl AsRef<Path>,
-    ) -> miette::Result<inotify::EventStream<[u8; 4096]>> {
-        let inotify = Inotify::init()
-            .into_diagnostic()
-            .wrap_err("Failed to create inotify instance")?;
-
-        inotify
-            .watches()
-            .add(dir, WatchMask::MODIFY | WatchMask::CREATE | WatchMask::MOVE)
-            .into_diagnostic()
-            .wrap_err("Failed to add watch on config to inotify instance")?;
-
-        let event_stream = inotify
-            .into_event_stream([0u8; 4096])
-            .into_diagnostic()
-            .wrap_err("Failed to create inotify event stream for config file")?;
-
-        Ok(event_stream)
-    }
-
     pub async fn run(
         &mut self,
         terminal: &mut DefaultTerminal,
@@ -619,7 +597,8 @@ impl App {
             })?
             .to_os_string();
 
-        let mut config_dir_event_stream = Self::create_dir_event_stream(&config_dir)
+        let mut config_dir_watch = config::Watch::<4096>::try_new(config_dir)
+            .into_diagnostic()
             .wrap_err("Failed to create config directory event stream")?;
 
         loop {
@@ -670,9 +649,12 @@ impl App {
                     true
                 },
 
-                event = config_dir_event_stream.next() => {
+                event = config_dir_watch.next() => {
                     let Some(event) = event else {
-                        config_dir_event_stream = Self::create_dir_event_stream(&config_dir).wrap_err("Failed to recreate config directory event stream")?;
+                        config_dir_watch
+                            .restore()
+                            .into_diagnostic()
+                            .wrap_err("Failed to recreate config directory event stream")?;
                         continue;
                     };
 

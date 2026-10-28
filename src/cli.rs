@@ -42,7 +42,6 @@ pub enum Command {
 }
 
 #[derive(Clone, Debug, Display)]
-#[display("{_0}")]
 pub struct ServerArgument(String);
 
 impl From<ServerArgument> for String {

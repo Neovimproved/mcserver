@@ -109,7 +109,6 @@ pub struct Version {
 #[derive(Debug, Display, Error, From)]
 #[allow(dead_code)]
 pub enum ParseVersionError {
-    #[display("{_0}")]
     ParseIntError(ParseIntError),
 
     #[display("No major version was found")]
