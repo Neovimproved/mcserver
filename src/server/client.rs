@@ -1,11 +1,9 @@
-use std::sync::Arc;
-
 use color_eyre::eyre::{Context, Result, eyre};
 use dashmap::DashMap;
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     select,
-    sync::{Mutex, broadcast, mpsc::UnboundedSender, oneshot},
+    sync::{RwLock, broadcast, mpsc::UnboundedSender, oneshot},
 };
 
 use crate::{
@@ -30,8 +28,8 @@ enum ServeAction {
 pub struct Client<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> {
     reader: R,
     writer: W,
-    config: &'static Mutex<Config>,
-    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+    config: &'static RwLock<Config>,
+    server_communicators: &'static DashMap<String, ServerCommunicator>,
 
     action: ServeAction,
 }
@@ -39,8 +37,8 @@ pub struct Client<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> {
 impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     pub fn new(
         (reader, writer): (R, W),
-        config: &'static Mutex<Config>,
-        server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+        config: &'static RwLock<Config>,
+        server_communicators: &'static DashMap<String, ServerCommunicator>,
     ) -> Self {
         Self {
             reader,
@@ -52,7 +50,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     async fn send_synchronization_payload(&mut self) -> Result<()> {
-        let message = make_synchronization_payload(&self.server_communicators);
+        let message = make_synchronization_payload(self.server_communicators);
 
         let writer = &mut self.writer;
         write_message!(writer, message)
@@ -129,17 +127,15 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     async fn attach(&mut self, name: String) -> Result<ServeAction> {
-        let (message_sender, requets_sender, mut receiver) = match self
-            .server_communicators
-            .get(&name)
-        {
-            Some(com) => (
-                com.instruction_sender.clone(),
-                com.client_request_sender.clone(),
-                com.server_message_sender.subscribe(),
-            ),
-            None => initialize_server(self.config, name, self.server_communicators.clone()).await?,
-        };
+        let (message_sender, requets_sender, mut receiver) =
+            match self.server_communicators.get(&name) {
+                Some(com) => (
+                    com.instruction_sender.clone(),
+                    com.client_request_sender.clone(),
+                    com.server_message_sender.subscribe(),
+                ),
+                None => initialize_server(self.config, name, self.server_communicators).await?,
+            };
 
         let (tx, rx) = oneshot::channel();
 

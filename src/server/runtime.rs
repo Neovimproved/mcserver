@@ -1,10 +1,11 @@
-use std::{borrow::Cow, panic, sync::Arc};
+use std::{borrow::Cow, panic};
 
 use color_eyre::{
     Result,
-    eyre::{Context, eyre},
+    eyre::{Context, ContextCompat, eyre},
 };
 use dashmap::DashMap;
+use inotify::{Inotify, WatchMask};
 use pty_process::{Command, Pty};
 use tokio::{
     fs,
@@ -13,7 +14,7 @@ use tokio::{
     process::Child,
     select,
     sync::{
-        Mutex, broadcast,
+        RwLock, broadcast,
         mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     },
 };
@@ -21,6 +22,7 @@ use tokio::{
 use crate::{
     config::{self, Config},
     consts::{LOCAL_TCP_ADDR, SOCKET_PATH},
+    error::display_path,
     line_buffer::LineBuffer,
     messages::{ServerInstruction, ServerMessage},
     metadata,
@@ -31,14 +33,14 @@ use crate::{
 };
 
 async fn spawn_server_process(
-    config: &'static Mutex<Config>,
+    config: &'static RwLock<Config>,
     name: &str,
     additional_flags: &[String],
 ) -> Result<(Pty, Child)> {
     let (pty, pts) = pty_process::open()?;
     pty.resize(pty_process::Size::new(24, 80))?;
 
-    let config_lock = config.lock().await;
+    let config_lock = config.read().await;
 
     let server_dir = config_lock.servers_directory.path.join(name);
 
@@ -151,7 +153,7 @@ async fn start_server(
 }
 
 pub fn make_synchronization_payload(
-    server_communicators: &Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: &'static DashMap<String, ServerCommunicator>,
 ) -> ServerMessage {
     ServerMessage::SynchronizationPayload {
         online_servers: server_communicators
@@ -162,12 +164,12 @@ pub fn make_synchronization_payload(
 }
 
 struct Server {
-    config: &'static Mutex<Config>,
+    config: &'static RwLock<Config>,
     name: String,
     message_receiver: UnboundedReceiver<ServerInstruction>,
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<Vec<u8>>,
-    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: &'static DashMap<String, ServerCommunicator>,
 }
 
 impl Drop for Server {
@@ -177,18 +179,18 @@ impl Drop for Server {
         let _ = self
             .sender
             .send(bitcode::encode(&make_synchronization_payload(
-                &self.server_communicators,
+                self.server_communicators,
             )));
     }
 }
 
 async fn server_lifecycle(
-    config: &'static Mutex<Config>,
+    config: &'static RwLock<Config>,
     name: String,
     message_receiver: UnboundedReceiver<ServerInstruction>,
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<Vec<u8>>,
-    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: &'static DashMap<String, ServerCommunicator>,
 ) -> Result<()> {
     println!("Starting {name}");
 
@@ -221,9 +223,9 @@ async fn server_lifecycle(
 }
 
 pub async fn initialize_server(
-    config: &'static Mutex<Config>,
+    config: &'static RwLock<Config>,
     name: String,
-    server_communicators: Arc<DashMap<String, ServerCommunicator>>,
+    server_communicators: &'static DashMap<String, ServerCommunicator>,
 ) -> Result<(
     UnboundedSender<ServerInstruction>,
     UnboundedSender<Request>,
@@ -261,9 +263,9 @@ pub async fn initialize_server(
 }
 
 pub async fn main() -> Result<()> {
-    let config: &'static Mutex<Config> = Box::leak(Box::new(Mutex::new(
-        config::read().await.wrap_err("Failed to read config")?.0,
-    )));
+    let (config, _, config_path) = config::read().await.wrap_err("Failed to read config")?;
+
+    let config: &'static RwLock<_> = Box::leak(Box::new(RwLock::new(config)));
 
     if let Err(err) = fs::remove_file(SOCKET_PATH).await
         && err.kind() != io::ErrorKind::NotFound
@@ -277,16 +279,27 @@ pub async fn main() -> Result<()> {
     let unix_sock_listener = UnixListener::bind(SOCKET_PATH)?;
     println!("Bound to unix socket!");
 
-    let server_communicators: Arc<DashMap<String, ServerCommunicator>> = Arc::new(DashMap::new());
+    let server_communicators: &'static DashMap<_, _> = Box::leak(Box::new(DashMap::new()));
 
     let mut buf = String::new();
     let mut stdin_finished = false;
     let mut stdin_reader = BufReader::new(io::stdin());
 
+    let inotify = Inotify::init().wrap_err("Failed to initialize inotify instance")?;
+
+    inotify.watches().add(
+        config_path.parent().wrap_err_with(|| {
+            format!(
+                "Failed to get parent of config path ({})",
+                display_path(&config_path)
+            )
+        })?,
+        WatchMask::MODIFY | WatchMask::CREATE,
+    )?;
+
     loop {
         select! {
             res = tcp_listener.accept() => {
-                let server_communicators = server_communicators.clone();
                 tokio::spawn(async move {
                     let (mut stream, addr) = res?;
 
@@ -301,8 +314,6 @@ pub async fn main() -> Result<()> {
             },
 
             res = unix_sock_listener.accept() => {
-                let server_communicators = server_communicators.clone();
-
                 tokio::spawn(async move {
                     let (mut stream, addr) = res?;
 
