@@ -1,52 +1,11 @@
 ## Core
-- [ ] Run the command, spawned in a PTY
-- [ ] Capture PTY input/output
+- [x] Run the command, spawned in a PTY
+- [x] Capture PTY input/output
 - [ ] Parse the input with an ansi parser
-- [ ] Maintain the terminal state / screen buffer
-- [ ] Render the parsed input with ratatui
+- [x] Maintain the terminal state / screen buffer
+- [x] Render the parsed input with ratatui
 - [ ] Detect when the process exits and cleanly exit the program
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ## Additional
-- [ ] Handle resizing
-- [ ] Add a selection menu
-- [ ] Potentially cursor movement
+- [x] Add a selection menu
