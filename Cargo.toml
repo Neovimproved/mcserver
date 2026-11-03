@@ -5,7 +5,6 @@ edition = "2024"
 description = "Minecraft server multiplexer"
 license = "MIT"
 repository = "https://github.com/Neovimproved/mcserver"
-default-run = "mcserver"
 
 [dependencies]
 bitcode = "0.6.9"
