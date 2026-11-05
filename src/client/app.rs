@@ -15,7 +15,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Span, ToSpan},
+    text::{Line, Span, Text, ToSpan, ToText},
     widgets::{Block, Borders, List, Paragraph, Wrap},
 };
 use tokio::{
@@ -60,6 +60,15 @@ macro_rules! log {
         if !std::io::stderr().is_terminal() {
             eprintln!($($arg)*);
         }
+    }};
+
+}
+
+macro_rules! log_dbg {
+    ($expression:expr) => {{
+        let object = $expression;
+        log!("{object:?}");
+        object
     }};
 }
 
@@ -350,10 +359,12 @@ impl App {
                     }
                     KeyCode::Enter => {
                         if name == confirmation {
-                            fs::remove_dir_all(name)
-                                .await
-                                .into_diagnostic()
-                                .wrap_err("Failed to remove directory {}")?;
+                            fs::remove_dir_all(log_dbg!(
+                                self.config.servers_directory.path.join(name)
+                            ))
+                            .await
+                            .into_diagnostic()
+                            .wrap_err("Failed to remove directory {}")?;
                         } else {
                             error_message.insert(format!("Failed to rename {entry_type}"));
                         }
@@ -921,73 +932,91 @@ impl App {
             .scroll((vscroll as u16, 0))
     }
 
-    fn center_rect(area: Rect, x_percent: u16, y_percent: u16) -> Rect {
-        let horizontal_fill = 50u16.saturating_sub(x_percent / 2);
-        let vertical_fill = 50u16.saturating_sub(y_percent / 2);
-
-        let vertical_layout =
-            Layout::vertical([vertical_fill, y_percent, vertical_fill].map(Constraint::Percentage))
-                .split(area);
-
-        let horizontal_layout = Layout::horizontal(
-            [horizontal_fill, x_percent, horizontal_fill].map(Constraint::Percentage),
-        )
-        .split(vertical_layout[1]);
-
-        horizontal_layout[1]
+    fn center_horizontal(area: Rect, x_percent: u16) -> Rect {
+        Layout::horizontal([50 - x_percent / 2, x_percent].map(Constraint::Percentage)).split(area)
+            [1]
     }
 
-    fn draw_addition_widget(
+    fn draw_addition_widgets<'a>(
         &self,
-        name: &str,
-        version: &str,
-        server_software: &str,
+        name: &'a str,
+        version: &'a str,
+        server_software: &'a str,
         field: AddingField,
-    ) -> List<'_> {
-        // let mut lines = vec![];
-        let mut addition_text = format!("Name: {name}");
-        let mut version_text = format!("Version: {version}");
-        let mut server_software_text = format!("Server: {server_software}");
-
-        if self.blinking {
+    ) -> [Paragraph<'a>; 3] {
+        let [addition_text, version_text, server_software_text] = if self.blinking {
             match field {
-                AddingField::Name => &mut addition_text,
-                AddingField::Version => &mut version_text,
-                AddingField::Software => &mut server_software_text,
+                AddingField::Name => [
+                    Line::from_iter([Span::from(name), ' '.on_white()]),
+                    Line::from(version),
+                    Line::from(server_software),
+                ],
+                AddingField::Version => [
+                    Line::from(name),
+                    Line::from_iter([Span::from(version), ' '.on_white()]),
+                    Line::from(server_software),
+                ],
+                AddingField::Software => [
+                    Line::from(name),
+                    Line::from(version),
+                    Line::from_iter([Span::from(server_software), ' '.on_white()]),
+                ],
             }
-            .push(CURSOR_CHAR)
+        } else {
+            [
+                Line::from(name),
+                Line::from(version),
+                Line::from(server_software),
+            ]
         }
+        .map(Paragraph::new);
 
-        List::new([addition_text, version_text, server_software_text])
-            .block(Block::bordered().title("Adding server"))
+        [
+            addition_text.block(Block::bordered().border_style(Color::Reset).title("Name")),
+            version_text.block(
+                Block::bordered()
+                    .border_style(Color::Reset)
+                    .title("Version"),
+            ),
+            server_software_text
+                .block(Block::bordered().border_style(Color::Reset).title("Server")),
+        ]
     }
 
     fn draw_deletion_widget<'a>(
         &self,
         name: &str,
-        confirmation: &str,
+        confirmation: &'a str,
         error_message: &'a TempMessage<String>,
         entry_type: ServerEntryType,
     ) -> Paragraph<'a> {
-        let mut deletion_text = format!(
-            "Confirm you would like to delete the {entry_type} `{name}` by typing it out: {confirmation}"
-        );
+        let deletion_line = if confirmation.is_empty() {
+            let string = format!("Type {name} here to confirm");
 
-        if self.blinking {
-            deletion_text.push(CURSOR_CHAR);
+            if self.blinking {
+                let mut chars = string.chars();
+                let first_char = chars.next().unwrap_or(' ');
+                Line::from_iter([
+                    first_char.on_white().black(),
+                    chars.collect::<String>().gray(),
+                ])
+            } else {
+                Line::from(string)
+            }
+        } else if self.blinking {
+            Line::from_iter([Span::from(confirmation), ' '.on_white()])
+        } else {
+            Line::from(confirmation)
+        };
+
+        let mut block = Block::bordered().title(format!("Deleting {entry_type}"));
+
+        if let Some(message) = error_message.get() {
+            block = block.title(Line::from(message.as_str()).red().right_aligned());
         }
 
-        Paragraph::new(deletion_text)
-            .block(
-                Block::bordered().title(if let Some(message) = error_message.get() {
-                    Line::from(vec![
-                        Span::from(format!("Deleting {entry_type}   ")),
-                        message.to_span().red(),
-                    ])
-                } else {
-                    Line::from(format!("Deleting {entry_type}"))
-                }),
-            )
+        Paragraph::new(deletion_line)
+            .block(block)
             .wrap(Wrap { trim: false })
             .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset))
     }
@@ -1001,6 +1030,8 @@ impl App {
 
         let frame_area = frame.area();
 
+        const DELETION_WIDGET_LINES: u16 = 3;
+
         match &self.mode {
             Mode::Selecting(selection_state) => {
                 frame.render_widget(self.draw_servers_list_widget(), frame_area);
@@ -1012,10 +1043,22 @@ impl App {
                         version,
                         server_software,
                         field,
-                    } => frame.render_widget(
-                        self.draw_addition_widget(name, version, server_software, *field),
-                        Self::center_rect(frame.area(), 50, 40),
-                    ),
+                    } => {
+                        let [addition_text, version_text, server_software_text] =
+                            self.draw_addition_widgets(name, version, server_software, *field);
+
+                        let addition_areas = Layout::vertical([
+                            Constraint::Length((frame_area.height - 9) / 2),
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                        ])
+                        .split(Self::center_horizontal(frame.area(), 90));
+
+                        frame.render_widget(addition_text, addition_areas[1]);
+                        frame.render_widget(version_text, addition_areas[2]);
+                        frame.render_widget(server_software_text, addition_areas[3]);
+                    }
                     SelectionState::Deleting {
                         name,
                         confirmation,
@@ -1023,7 +1066,14 @@ impl App {
                         entry_type,
                     } => frame.render_widget(
                         self.draw_deletion_widget(name, confirmation, error_message, *entry_type),
-                        Self::center_rect(frame.area(), 50, 40),
+                        Layout::vertical(
+                            [
+                                (frame_area.height - DELETION_WIDGET_LINES) / 2,
+                                DELETION_WIDGET_LINES,
+                            ]
+                            .map(Constraint::Length),
+                        )
+                        .split(Self::center_horizontal(frame_area, 90))[1],
                     ),
                 }
             }
