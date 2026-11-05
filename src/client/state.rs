@@ -86,13 +86,9 @@ impl AddingField {
 #[derive(Clone, Copy, Debug, Display)]
 #[allow(dead_code)]
 pub enum ServerSoftware {
-    #[display("Fabric")]
     Fabric,
-    #[display("Forge")]
     Forge,
-    #[display("NeoForge")]
     NeoForge,
-    #[display("Paper")]
     Paper,
     Purpur,
     Vanilla,
@@ -117,8 +113,8 @@ pub enum ParseVersionError {
     #[display("No minor version was found")]
     NoMinor,
 
-    #[display("Malformed version (received trailing period)")]
-    Malformed,
+    #[display("Malformed version (received trailing period after minor version)")]
+    MalformedTrailingPeriod,
 }
 
 impl FromStr for Version {
@@ -135,7 +131,7 @@ impl FromStr for Version {
             let minor = remaining[..period].parse()?;
             let patch = remaining
                 .get(period + 1..)
-                .ok_or(ParseVersionError::Malformed)?
+                .ok_or(ParseVersionError::MalformedTrailingPeriod)?
                 .parse()?;
 
             (minor, Some(patch))
