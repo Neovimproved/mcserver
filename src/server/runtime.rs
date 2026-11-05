@@ -31,30 +31,30 @@ use crate::{
 };
 
 async fn spawn_server_process(
-    config: &'static RwLock<Config>,
     name: &str,
+    config: &'static RwLock<Config>,
     additional_flags: &[String],
 ) -> Result<(Pty, Child)> {
     let (pty, pts) = pty_process::open()?;
     pty.resize(pty_process::Size::new(24, 80))?;
 
-    let config_lock = config.read().await;
-
-    let server_dir = config_lock.servers_directory.path.join(name);
+    let config_guard = config.read().await;
 
     let flags = if additional_flags.is_empty() {
-        Cow::Borrowed(&config_lock.default_java_args)
+        Cow::Borrowed(&config_guard.default_java_args)
     } else {
-        let mut flags = config_lock.default_java_args.clone();
+        let mut flags = config_guard.default_java_args.clone();
         flags.extend_from_slice(additional_flags);
         Cow::Owned(flags)
     };
 
+    let server_path = config_guard.servers_directory.path.join(name);
+
     let child = Command::new("java")
         .arg("-jar")
-        .arg(metadata::get_jar_file(server_dir.clone()).await?)
+        .arg(metadata::get_jar_file(&server_path).await?)
         .args(flags.as_ref())
-        .current_dir(server_dir)
+        .current_dir(server_path)
         .spawn(pts)?;
 
     // pts (slave thing) can be dropped
@@ -74,7 +74,7 @@ async fn start_server(
     let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
 
     // TODO: allow additional flags
-    let (mut pty, mut child) = spawn_server_process(config, name, &[])
+    let (mut pty, mut child) = spawn_server_process(name, config, &[])
         .await
         .wrap_err("Failed to spawn server process")?;
 
@@ -207,7 +207,7 @@ async fn server_lifecycle(
         eprintln!("Server: {} btwwwwww\n{err:?}", server.name);
     }
 
-    metadata::update_last_used(Cow::Owned(metadata::dir(&server.name)))
+    metadata::update_last_used(metadata::dir(&server.name))
         .await
         .wrap_err("Failed to update metadata")?;
 
@@ -283,7 +283,8 @@ pub async fn main() -> Result<()> {
     let mut stdin_finished = false;
     let mut stdin_reader = BufReader::new(io::stdin());
 
-    let mut config_watch = config::Watch::<4096>::try_new(config_path.clone())
+    let mut config_watch: config::Watch = config::Watch::try_new(config_path.clone())
+        .await
         .wrap_err("Failed to create config watch")?;
 
     loop {
@@ -334,14 +335,8 @@ pub async fn main() -> Result<()> {
             }
 
             res = config_watch.next() => {
-                let Some(res) = res else {
-                    config_watch.restore().wrap_err("Failed to restore config watch")?;
-                    continue;
-                };
-
-                if let Err(err) = res {
-                    eprintln!("Failed to read from config watch with err: {err:?}");
-                    continue;
+                if !(res.wrap_err("Failed to read from config")?) {
+                    config_watch.restore()?;
                 }
 
                 match config::read_file(&config_path).await {

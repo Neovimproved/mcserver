@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use std::{
-    borrow::Cow,
     path::{Path, PathBuf},
     time::{SystemTime, SystemTimeError},
 };
@@ -49,7 +48,8 @@ pub fn dir(server_dir: impl AsRef<Path>) -> PathBuf {
     server_dir.as_ref().join(METADATA_DIRECTORY)
 }
 
-pub async fn get_jar_file(mut server_dir: PathBuf) -> MetadataResult<PathBuf> {
+pub async fn get_jar_file(server_dir: impl Into<PathBuf>) -> MetadataResult<PathBuf> {
+    let mut server_dir = server_dir.into();
     let mut file_path = dir(&server_dir);
     file_path.push(JAR_FILE_NAME);
 
@@ -113,12 +113,13 @@ pub async fn get_last_used(metadata_dir: &Path) -> MetadataResult<LastUsed> {
     }))
 }
 
-pub async fn update_last_used(metadata_dir: Cow<'_, Path>) -> MetadataResult<()> {
-    let mut path = metadata_dir.to_path_buf();
+pub async fn update_last_used(metadata_dir: PathBuf) -> MetadataResult<()> {
+    fs::create_dir_all(&metadata_dir).await?;
+
+    let mut path = metadata_dir;
     path.push(LAST_USED_FILE_NAME);
 
     let current_time = get_time_since_unix_epoch_secs()?;
-    fs::create_dir_all(metadata_dir).await?;
     fs::write(path, current_time.to_be_bytes()).await?;
 
     Ok(())

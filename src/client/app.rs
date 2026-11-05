@@ -32,7 +32,6 @@ use crate::{
     },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
-    error::display_path,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
@@ -120,8 +119,6 @@ impl App {
 
         let servers = servers::read(config.servers_directory.as_ref()).await?;
 
-        let blinking = config.terminal_interface.cursor_blink.is_some();
-
         Ok(Self {
             config,
             document,
@@ -137,7 +134,7 @@ impl App {
                 width: 80,
                 height: 24,
             },
-            blinking,
+            blinking: true,
             exiting: false,
         })
     }
@@ -575,29 +572,30 @@ impl App {
 
         let mut redraw = true;
 
-        let config_dir = self
-            .config_file
-            .parent()
-            .wrap_err_with(|| {
-                format!(
-                    "Failed to get parent of config file ({})",
-                    display_path(&self.config_file)
-                )
-            })?
-            .to_path_buf();
+        // let config_dir = self
+        //     .config_file
+        //     .parent()
+        //     .wrap_err_with(|| {
+        //         format!(
+        //             "Failed to get parent of config file ({})",
+        //             display_path(&self.config_file)
+        //         )
+        //     })?
+        //     .to_path_buf();
+        //
+        // let config_file_name = self
+        //     .config_file
+        //     .file_name()
+        //     .wrap_err_with(|| {
+        //         format!(
+        //             "Failed to get file name of config path ({})",
+        //             display_path(&self.config_file)
+        //         )
+        //     })?
+        //     .to_os_string();
 
-        let config_file_name = self
-            .config_file
-            .file_name()
-            .wrap_err_with(|| {
-                format!(
-                    "Failed to get file name of config path ({})",
-                    display_path(&self.config_file)
-                )
-            })?
-            .to_os_string();
-
-        let mut config_dir_watch = config::Watch::<4096>::try_new(config_dir)
+        let mut config_dir_watch: config::Watch = config::Watch::try_new(&self.config_file)
+            .await
             .into_diagnostic()
             .wrap_err("Failed to create config directory event stream")?;
 
@@ -649,25 +647,14 @@ impl App {
                     true
                 },
 
-                event = config_dir_watch.next() => {
-                    let Some(event) = event else {
+                result = config_dir_watch.next() => {
+                    if !(result.into_diagnostic().wrap_err("Failed to read event from inotify event stream")?) {
                         config_dir_watch
                             .restore()
                             .into_diagnostic()
                             .wrap_err("Failed to recreate config directory event stream")?;
                         continue;
                     };
-
-                    let event = event.into_diagnostic().wrap_err("Failed to read inotify event")?;
-
-                    let Some(name) = event.name else {
-                        log!("Nameless event");
-                        continue;
-                    };
-
-                    if name != config_file_name {
-                        continue;
-                    }
 
                     let Ok((config, document)) = config::read_file(&self.config_file).await else {
                         log!("Erroneous config file contents");
