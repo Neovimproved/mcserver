@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::{
     client::state::{AddingField, TempMessage},
+    log,
     servers::ServerEntryType,
 };
 
@@ -34,19 +35,62 @@ pub struct Addition<'a> {
     software_paragraph: Paragraph<'a>,
 }
 
-fn blinking_text<'a>(input: &'a str, default: &'a str) -> Line<'a> {
+fn slice_to_fit(s: &str, width: u16) -> &str {
+    &s[(s.len() + 1).saturating_sub(width as usize)..]
+}
+
+fn blinking_input_or<'a>(input: &'a str, default: &'a str, width: u16) -> Line<'a> {
     if input.is_empty() {
-        blinking_default(default)
+        blinking_default(slice_to_fit(default, width))
     } else {
-        blinking_input(input)
+        blinking_input(slice_to_fit(input, width))
     }
 }
 
-fn non_blinking_text<'a>(input: &'a str, default: &'a str) -> Line<'a> {
+fn blinking_text_or_else<'a>(
+    input: &'a str,
+    default: impl FnOnce() -> String,
+    width: u16,
+) -> Line<'a> {
+    log!("Blinking text or else");
     if input.is_empty() {
-        Line::from(input)
+        let string = default();
+        let visible_string = slice_to_fit(&string, width);
+
+        let (next_char_idx, first_char) = visible_string
+            .char_indices()
+            .next()
+            .map(|(idx, ch)| (idx + 1, ch))
+            .unwrap_or((0, ' '));
+
+        Line::from_iter([
+            first_char.on_white().black(),
+            visible_string[next_char_idx..].to_string().gray(),
+        ])
     } else {
-        default.gray().into()
+        blinking_input(slice_to_fit(input, width))
+    }
+}
+
+fn non_blinking_text_or<'a>(input: &'a str, default: &'a str, width: u16) -> Line<'a> {
+    if input.is_empty() {
+        slice_to_fit(default, width).gray().into()
+    } else {
+        Line::from(slice_to_fit(input, width))
+    }
+}
+
+fn non_blinking_text_or_else<'a>(
+    input: &'a str,
+    default: impl FnOnce() -> String,
+    width: u16,
+) -> Line<'a> {
+    if input.is_empty() {
+        let string = default();
+        let visible_string = slice_to_fit(&string, width);
+        visible_string.to_string().gray().into()
+    } else {
+        Line::from(slice_to_fit(input, width))
     }
 }
 
@@ -57,36 +101,37 @@ impl<'a> Addition<'a> {
         software: &'a str,
         adding_field: AddingField,
         blinking: bool,
+        text_width: u16,
     ) -> Self {
-        const DEFAULT_NAME: &str = "Enter name:";
+        const DEFAULT_NAME: &str = "Unnamed";
         const DEFAULT_VERSION: &str = "Latest";
         const DEFAULT_SOFTWARE: &str = "Vanilla";
 
         let [addition_text, version_text, server_software_text] = if blinking {
             let name_text = if let AddingField::Name = adding_field {
-                blinking_text(name, DEFAULT_NAME)
+                blinking_input_or(name, DEFAULT_NAME, text_width)
             } else {
-                non_blinking_text(name, DEFAULT_NAME)
+                non_blinking_text_or(name, DEFAULT_NAME, text_width)
             };
 
             let version_text = if let AddingField::Version = adding_field {
-                blinking_text(version, DEFAULT_VERSION)
+                blinking_input_or(version, DEFAULT_VERSION, text_width)
             } else {
-                non_blinking_text(version, DEFAULT_VERSION)
+                non_blinking_text_or(version, DEFAULT_VERSION, text_width)
             };
 
             let software_text = if let AddingField::Software = adding_field {
-                blinking_text(software, DEFAULT_SOFTWARE)
+                blinking_input_or(software, DEFAULT_SOFTWARE, text_width)
             } else {
-                non_blinking_text(software, DEFAULT_SOFTWARE)
+                non_blinking_text_or(software, DEFAULT_SOFTWARE, text_width)
             };
 
             [name_text, version_text, software_text]
         } else {
             [
-                non_blinking_text(name, DEFAULT_NAME),
-                non_blinking_text(version, DEFAULT_VERSION),
-                non_blinking_text(software, DEFAULT_SOFTWARE),
+                non_blinking_text_or(name, DEFAULT_NAME, text_width),
+                non_blinking_text_or(version, DEFAULT_VERSION, text_width),
+                non_blinking_text_or(software, DEFAULT_SOFTWARE, text_width),
             ]
         }
         .map(Paragraph::new);
@@ -158,24 +203,14 @@ impl<'a> Deletion<'a> {
         entry_type: ServerEntryType,
         blinking: bool,
         background_color: Color,
+        width: u16,
     ) -> Self {
-        let deletion_line = if confirmation.is_empty() {
-            let string = format!("Type {name} here to confirm");
+        let default = || format!("Type {name} here to confirm");
 
-            if blinking {
-                let mut chars = string.chars();
-                let first_char = chars.next().unwrap_or(' ');
-                Line::from_iter([
-                    first_char.on_white().black(),
-                    chars.collect::<String>().gray(),
-                ])
-            } else {
-                Line::from(string)
-            }
-        } else if blinking {
-            Line::from_iter([Span::from(confirmation), ' '.on_white()])
+        let deletion_line = if blinking {
+            blinking_text_or_else(confirmation, default, width)
         } else {
-            Line::from(confirmation)
+            non_blinking_text_or_else(confirmation, default, width)
         };
 
         let mut block = Block::bordered().title(format!("Deleting {entry_type}"));

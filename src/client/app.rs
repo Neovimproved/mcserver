@@ -969,7 +969,14 @@ impl App {
                         .split(Self::center_horizontal(frame.area(), 90))[1];
 
                         frame.render_widget(
-                            Addition::new(name, version, server_software, *field, self.blinking),
+                            Addition::new(
+                                name,
+                                version,
+                                server_software,
+                                *field,
+                                self.blinking,
+                                addition_area.width.saturating_sub(2),
+                            ),
                             addition_area,
                         );
                     }
@@ -978,24 +985,28 @@ impl App {
                         confirmation,
                         error_message,
                         entry_type,
-                    } => frame.render_widget(
-                        Deletion::new(
-                            name,
-                            confirmation,
-                            error_message,
-                            *entry_type,
-                            self.blinking,
-                            self.ti_cfg().background_color.unwrap_or(Color::Reset),
-                        ),
-                        Layout::vertical(
-                            [
-                                (frame_area.height - DELETION_WIDGET_LINES) / 2,
-                                DELETION_WIDGET_LINES,
-                            ]
-                            .map(Constraint::Length),
-                        )
-                        .split(Self::center_horizontal(frame_area, 90))[1],
-                    ),
+                    } => {
+                        let horizontal_layout = Self::center_horizontal(frame_area, 90);
+                        frame.render_widget(
+                            Deletion::new(
+                                name,
+                                confirmation,
+                                error_message,
+                                *entry_type,
+                                self.blinking,
+                                self.ti_cfg().background_color.unwrap_or(Color::Reset),
+                                horizontal_layout.width.saturating_sub(2),
+                            ),
+                            Layout::vertical(
+                                [
+                                    (frame_area.height - DELETION_WIDGET_LINES) / 2,
+                                    DELETION_WIDGET_LINES,
+                                ]
+                                .map(Constraint::Length),
+                            )
+                            .split(horizontal_layout)[1],
+                        );
+                    }
                 }
             }
 
