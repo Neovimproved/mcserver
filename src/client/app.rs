@@ -15,8 +15,8 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
-    text::{Line, Span, Text, ToSpan, ToText},
-    widgets::{Block, Borders, List, Paragraph, Wrap},
+    text::{Line, Span, ToSpan},
+    widgets::{Block, Borders, List, Paragraph},
 };
 use tokio::{
     fs,
@@ -26,16 +26,18 @@ use tokio::{
 };
 
 use crate::{
-    client::state::{
-        AbsoluteArea, AddingField, ConnectionState, Lines, Mode, SelectionState, ServerList,
-        TempMessage,
+    client::{
+        state::{
+            AbsoluteArea, AddingField, ConnectionState, Lines, Mode, SelectionState, ServerList,
+        },
+        widgets::{Addition, Deletion},
     },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry, ServerEntryType, ServerObject},
+    servers::{self, ServerEntry, ServerObject},
     write_message,
 };
 
@@ -937,90 +939,6 @@ impl App {
             [1]
     }
 
-    fn draw_addition_widgets<'a>(
-        &self,
-        name: &'a str,
-        version: &'a str,
-        server_software: &'a str,
-        field: AddingField,
-    ) -> [Paragraph<'a>; 3] {
-        let [addition_text, version_text, server_software_text] = if self.blinking {
-            match field {
-                AddingField::Name => [
-                    Line::from_iter([Span::from(name), ' '.on_white()]),
-                    Line::from(version),
-                    Line::from(server_software),
-                ],
-                AddingField::Version => [
-                    Line::from(name),
-                    Line::from_iter([Span::from(version), ' '.on_white()]),
-                    Line::from(server_software),
-                ],
-                AddingField::Software => [
-                    Line::from(name),
-                    Line::from(version),
-                    Line::from_iter([Span::from(server_software), ' '.on_white()]),
-                ],
-            }
-        } else {
-            [
-                Line::from(name),
-                Line::from(version),
-                Line::from(server_software),
-            ]
-        }
-        .map(Paragraph::new);
-
-        [
-            addition_text.block(Block::bordered().border_style(Color::Reset).title("Name")),
-            version_text.block(
-                Block::bordered()
-                    .border_style(Color::Reset)
-                    .title("Version"),
-            ),
-            server_software_text
-                .block(Block::bordered().border_style(Color::Reset).title("Server")),
-        ]
-    }
-
-    fn draw_deletion_widget<'a>(
-        &self,
-        name: &str,
-        confirmation: &'a str,
-        error_message: &'a TempMessage<String>,
-        entry_type: ServerEntryType,
-    ) -> Paragraph<'a> {
-        let deletion_line = if confirmation.is_empty() {
-            let string = format!("Type {name} here to confirm");
-
-            if self.blinking {
-                let mut chars = string.chars();
-                let first_char = chars.next().unwrap_or(' ');
-                Line::from_iter([
-                    first_char.on_white().black(),
-                    chars.collect::<String>().gray(),
-                ])
-            } else {
-                Line::from(string)
-            }
-        } else if self.blinking {
-            Line::from_iter([Span::from(confirmation), ' '.on_white()])
-        } else {
-            Line::from(confirmation)
-        };
-
-        let mut block = Block::bordered().title(format!("Deleting {entry_type}"));
-
-        if let Some(message) = error_message.get() {
-            block = block.title(Line::from(message.as_str()).red().right_aligned());
-        }
-
-        Paragraph::new(deletion_line)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .bg(self.ti_cfg().background_color.unwrap_or(Color::Reset))
-    }
-
     fn render(&self, frame: &mut Frame) -> AbsoluteArea {
         if let Some(background_color) = self.ti_cfg().background_color {
             let background_block = Block::new().style(Style::new().bg(background_color));
@@ -1044,20 +962,16 @@ impl App {
                         server_software,
                         field,
                     } => {
-                        let [addition_text, version_text, server_software_text] =
-                            self.draw_addition_widgets(name, version, server_software, *field);
-
-                        let addition_areas = Layout::vertical([
+                        let addition_area = Layout::vertical([
                             Constraint::Length((frame_area.height - 9) / 2),
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                            Constraint::Length(3),
+                            Constraint::Length(9),
                         ])
-                        .split(Self::center_horizontal(frame.area(), 90));
+                        .split(Self::center_horizontal(frame.area(), 90))[1];
 
-                        frame.render_widget(addition_text, addition_areas[1]);
-                        frame.render_widget(version_text, addition_areas[2]);
-                        frame.render_widget(server_software_text, addition_areas[3]);
+                        frame.render_widget(
+                            Addition::new(name, version, server_software, *field, self.blinking),
+                            addition_area,
+                        );
                     }
                     SelectionState::Deleting {
                         name,
@@ -1065,7 +979,14 @@ impl App {
                         error_message,
                         entry_type,
                     } => frame.render_widget(
-                        self.draw_deletion_widget(name, confirmation, error_message, *entry_type),
+                        Deletion::new(
+                            name,
+                            confirmation,
+                            error_message,
+                            *entry_type,
+                            self.blinking,
+                            self.ti_cfg().background_color.unwrap_or(Color::Reset),
+                        ),
                         Layout::vertical(
                             [
                                 (frame_area.height - DELETION_WIDGET_LINES) / 2,

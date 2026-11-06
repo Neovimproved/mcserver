@@ -22,6 +22,7 @@ use tokio::{
 mod app;
 mod log;
 mod state;
+mod widgets;
 
 use app::App;
 
