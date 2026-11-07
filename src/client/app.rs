@@ -572,18 +572,25 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to receive message from server")?
         {
-            ServerMessage::KillFailure(err) => log!("Failed to kill child: {err}"),
+            ServerMessage::AlreadyStarted => {
+                log!("The server has already started apparently");
+            }
             ServerMessage::Closed => {
                 if let Mode::Console { input, state, .. } = &mut self.mode {
                     *input = "Press enter to return...".to_string();
                     *state = ConnectionState::Dead;
                 }
             }
+            ServerMessage::History(history) => {
+                if let Mode::Console { output, .. } = &mut self.mode {
+                    history
+                        .into_iter()
+                        .for_each(|line| output.push(display_bytes(&line).to_string()));
+                }
+            }
+            ServerMessage::KillFailure(err) => log!("Failed to kill child: {err}"),
             ServerMessage::Message(message) => {
                 log!("Received a message from the server: {message}");
-            }
-            ServerMessage::AlreadyStarted => {
-                log!("The server has already started apparently");
             }
             ServerMessage::NotAttached => {
                 log!("The server has not yet started apparently");

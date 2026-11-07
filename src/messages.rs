@@ -49,23 +49,11 @@ pub enum ServerInstruction {
 
 #[derive(Clone, Debug, Decode, Display, Encode)]
 pub enum ServerMessage {
-    #[display("Child has not been successfully killed ({_0})")]
-    KillFailure(String),
-
-    #[display("Child has naturally closed")]
-    Closed,
-
-    #[display("Message from server: {_0}")]
-    Message(String),
-
     #[display("A server has already started")]
     AlreadyStarted,
 
-    #[display("A server has not yet been created, so you cannot interact with one yet")]
-    NotAttached,
-
-    #[display("Output from the server: {}", display_bytes(_0))]
-    Output(Vec<u8>),
+    #[display("Child has naturally closed")]
+    Closed,
 
     #[display("Line history sent:\n{}", _0.iter().fold(String::new(), |mut acc, vec| {
         acc.push_str(&display_bytes(vec));
@@ -73,6 +61,18 @@ pub enum ServerMessage {
         acc
     }))]
     History(LineBuffer<Vec<u8>>),
+
+    #[display("Child has not been successfully killed ({_0})")]
+    KillFailure(String),
+
+    #[display("Message from server: {_0}")]
+    Message(String),
+
+    #[display("A server has not yet been created, so you cannot interact with one yet")]
+    NotAttached,
+
+    #[display("Output from the server: {}", display_bytes(_0))]
+    Output(Vec<u8>),
 
     #[display("Online servers: ({})", online_servers.iter().enumerate().fold(String::new(), |mut acc, (idx, server)| {
         acc.push_str(server);
