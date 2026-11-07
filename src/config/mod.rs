@@ -195,6 +195,10 @@ impl Config {
             terminal_interface: Default::default(),
         })
     }
+
+    pub fn ti(&self) -> &TerminalInterfaceConfig {
+        &self.terminal_interface
+    }
 }
 
 impl TryFrom<&KdlDocument> for Config {

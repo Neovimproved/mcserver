@@ -150,7 +150,7 @@ impl App {
     }
 
     fn ti_cfg(&self) -> &TerminalInterfaceConfig {
-        &self.config.terminal_interface
+        self.config.ti()
     }
 
     fn get_selected_mut(
@@ -507,12 +507,12 @@ impl App {
         blink_event: &mut Pin<&mut Either<Sleep, Pending<()>>>,
     ) {
         blink_event.set(if let Some(interval) = self.ti_cfg().cursor_blink {
+            self.blinking = !self.blinking;
             Either::Left(sleep(interval))
         } else {
+            self.blinking = true;
             Either::Right(pending())
         });
-
-        self.blinking = !self.blinking;
     }
 
     pub fn synchronize_servers(
@@ -614,6 +614,8 @@ impl App {
     ) -> miette::Result<()> {
         let mut event_reader = EventStream::new();
 
+        // let (event_sender, event_handler) = unbounded_channel();
+
         let blink_event = if let Some(blink_interval) = self.ti_cfg().cursor_blink {
             Either::Left(sleep(blink_interval))
         } else {
@@ -623,28 +625,6 @@ impl App {
         pin!(blink_event);
 
         let mut redraw = true;
-
-        // let config_dir = self
-        //     .config_file
-        //     .parent()
-        //     .wrap_err_with(|| {
-        //         format!(
-        //             "Failed to get parent of config file ({})",
-        //             display_path(&self.config_file)
-        //         )
-        //     })?
-        //     .to_path_buf();
-        //
-        // let config_file_name = self
-        //     .config_file
-        //     .file_name()
-        //     .wrap_err_with(|| {
-        //         format!(
-        //             "Failed to get file name of config path ({})",
-        //             display_path(&self.config_file)
-        //         )
-        //     })?
-        //     .to_os_string();
 
         let mut config_dir_watch: config::Watch = config::Watch::try_new(&self.config_file)
             .await
@@ -714,8 +694,14 @@ impl App {
                         continue;
                     };
 
+                    let blinking_before = self.ti_cfg().cursor_blink.is_some();
+
                     self.config = config;
                     self.document = document;
+
+                    if !blinking_before && self.ti_cfg().cursor_blink.is_some() {
+                        self.handle_blink_event(&mut blink_event).await;
+                    }
 
                     true
                 }
