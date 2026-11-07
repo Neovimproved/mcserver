@@ -51,9 +51,27 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     async fn delete_server(&self, name: String) -> Result<()> {
+        let servers_directory = &self.config.read().await.servers_directory.path;
+
+        let Ok(target_directory) = fs::canonicalize(servers_directory.join(&name)).await else {
+            eprintln!("The client is being malicious");
+            return Ok(());
+        };
+
+        if !target_directory.starts_with(servers_directory)
+            || target_directory == *servers_directory
+        {
+            eprintln!("The client is actually trying to delete files");
+            return Ok(());
+        }
+
         fs::remove_dir_all(self.config.read().await.servers_directory.path.join(name))
             .await
             .wrap_err("Failed to delete server")
+    }
+
+    async fn create_server(&self, _path: String) -> Result<()> {
+        todo!()
     }
 
     async fn send_synchronization_payload(&mut self) -> Result<()> {
@@ -80,11 +98,13 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             match message {
                 ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
+                ClientMessage::Create { server } => self.create_server(server).await?,
+
+                ClientMessage::Delete { server } => self.delete_server(server).await?,
+
                 ClientMessage::SynchronizationRequest => {
                     self.send_synchronization_payload().await?
                 }
-
-                ClientMessage::Delete(server) => self.delete_server(server).await?,
 
                 _ => {
                     let writer = &mut self.writer;
@@ -114,7 +134,11 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
         match message {
             ClientMessage::Attach { server } => action = Some(ServeAction::Attach(server)),
-            ClientMessage::Delete(server) => self.delete_server(server).await?,
+            ClientMessage::Create {
+                path,
+                server_software: _,
+            } => self.create_server(path).await?,
+            ClientMessage::Delete { server } => self.delete_server(server).await?,
             ClientMessage::Detach => action = Some(ServeAction::Prompt),
             ClientMessage::Kill => message_sender
                 .send(ServerInstruction::Kill)

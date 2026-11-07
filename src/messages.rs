@@ -91,11 +91,17 @@ pub enum ClientMessage {
     #[display("Attach to server {server}")]
     Attach { server: String },
 
+    #[display("Create server with path {path}")]
+    Create {
+        path: String,
+        server_software: String,
+    },
+
     #[display("Detach from the current server")]
     Detach,
 
-    #[display("Delete server {_0}")]
-    Delete(String),
+    #[display("Delete server with path {server}")]
+    Delete { server: String },
 
     #[display("Kill active process")]
     Kill,
