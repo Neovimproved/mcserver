@@ -1,11 +1,8 @@
 use std::{
-    num::ParseIntError,
     ops::{self, Index, RangeBounds},
-    str::FromStr,
     time::{Duration, SystemTime},
 };
 
-use derive_more::{Display, Error, From};
 use ratatui::layout::Rect;
 
 use crate::{
@@ -74,70 +71,6 @@ impl AddingField {
         };
 
         false
-    }
-}
-
-#[derive(Clone, Copy, Debug, Display)]
-#[allow(dead_code)]
-pub enum ServerSoftware {
-    Fabric,
-    Forge,
-    NeoForge,
-    Paper,
-    Purpur,
-    Vanilla,
-}
-
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub struct Version {
-    pub major: usize,
-    pub minor: usize,
-    pub patch: Option<usize>,
-}
-
-#[derive(Debug, Display, Error, From)]
-#[allow(dead_code)]
-pub enum ParseVersionError {
-    ParseIntError(ParseIntError),
-
-    #[display("No major version was found")]
-    NoMajor,
-
-    #[display("No minor version was found")]
-    NoMinor,
-
-    #[display("Malformed version (received trailing period after minor version)")]
-    MalformedTrailingPeriod,
-}
-
-impl FromStr for Version {
-    type Err = ParseVersionError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let period = s.find('.').ok_or(ParseVersionError::NoMajor)?;
-
-        let major = s[..period].parse()?;
-
-        let remaining = s.get(period + 1..).ok_or(ParseVersionError::NoMinor)?;
-
-        let (minor, patch) = if let Some(period) = remaining.find('.') {
-            let minor = remaining[..period].parse()?;
-            let patch = remaining
-                .get(period + 1..)
-                .ok_or(ParseVersionError::MalformedTrailingPeriod)?
-                .parse()?;
-
-            (minor, Some(patch))
-        } else {
-            (remaining.parse()?, None)
-        };
-
-        Ok(Self {
-            major,
-            minor,
-            patch,
-        })
     }
 }
 

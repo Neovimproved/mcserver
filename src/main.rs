@@ -19,6 +19,7 @@ mod cli;
 mod client;
 mod config;
 mod consts;
+mod creator;
 mod error;
 mod line_buffer;
 mod macros;
