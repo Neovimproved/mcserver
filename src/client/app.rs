@@ -77,7 +77,10 @@ macro_rules! log_dbg {
 macro_rules! log_bytes {
     ($bytes:expr) => {{
         #[cfg(debug_assertions)]
-        if !std::io::stderr().is_terminal() {
+        use std::io::{self, IsTerminal};
+
+        #[cfg(debug_assertions)]
+        if !io::stderr().is_terminal() {
             io::stderr()
                 .write_all(&$bytes)
                 .await
