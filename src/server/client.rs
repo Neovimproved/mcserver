@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Context, Result, eyre};
 use dashmap::DashMap;
 use tokio::{
+    fs,
     io::{self, AsyncReadExt, AsyncWriteExt},
     select,
     sync::{RwLock, broadcast, mpsc::UnboundedSender, oneshot},
@@ -49,6 +50,12 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         }
     }
 
+    async fn delete_server(&self, name: String) -> Result<()> {
+        fs::remove_dir_all(self.config.read().await.servers_directory.path.join(name))
+            .await
+            .wrap_err("Failed to delete server")
+    }
+
     async fn send_synchronization_payload(&mut self) -> Result<()> {
         let message = make_synchronization_payload(self.server_communicators);
 
@@ -76,6 +83,9 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
                 ClientMessage::SynchronizationRequest => {
                     self.send_synchronization_payload().await?
                 }
+
+                ClientMessage::Delete(server) => self.delete_server(server).await?,
+
                 _ => {
                     let writer = &mut self.writer;
                     write_message!(writer, ServerMessage::NotAttached).await?;
@@ -100,28 +110,20 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         let reader = &mut self.reader;
         let message: ClientMessage = read_message!(reader, size).await?;
 
-        let action = match message {
-            ClientMessage::Attach { server } => Some(ServeAction::Attach(server)),
-            ClientMessage::Detach => Some(ServeAction::Prompt),
-            ClientMessage::Kill => {
-                message_sender
-                    .send(ServerInstruction::Kill)
-                    .wrap_err("Failed to send kill instruction")?;
+        let mut action = None;
 
-                None
-            }
-            ClientMessage::ProgramInput(bytes) => {
-                message_sender
-                    .send(ServerInstruction::SendInput(bytes))
-                    .wrap_err("Failed to send input instruction")?;
-
-                None
-            }
-            ClientMessage::SynchronizationRequest => {
-                self.send_synchronization_payload().await?;
-                None
-            }
-        };
+        match message {
+            ClientMessage::Attach { server } => action = Some(ServeAction::Attach(server)),
+            ClientMessage::Delete(server) => self.delete_server(server).await?,
+            ClientMessage::Detach => action = Some(ServeAction::Prompt),
+            ClientMessage::Kill => message_sender
+                .send(ServerInstruction::Kill)
+                .wrap_err("Failed to send kill instruction")?,
+            ClientMessage::ProgramInput(bytes) => message_sender
+                .send(ServerInstruction::SendInput(bytes))
+                .wrap_err("Failed to send input instruction")?,
+            ClientMessage::SynchronizationRequest => self.send_synchronization_payload().await?,
+        }
 
         Ok(action)
     }

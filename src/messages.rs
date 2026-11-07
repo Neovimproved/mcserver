@@ -94,6 +94,9 @@ pub enum ClientMessage {
     #[display("Detach from the current server")]
     Detach,
 
+    #[display("Delete server {_0}")]
+    Delete(String),
+
     #[display("Kill active process")]
     Kill,
 

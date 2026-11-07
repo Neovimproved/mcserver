@@ -18,7 +18,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 use tokio::{
-    fs,
     io::{self, AsyncReadExt, AsyncWriteExt},
     pin, select,
     time::{Sleep, sleep},
@@ -379,15 +378,14 @@ impl App {
                     }
                     KeyCode::Enter => {
                         if deletion_state.name == deletion_state.confirmation {
-                            fs::remove_dir_all(log_dbg!(
-                                self.config
-                                    .servers_directory
-                                    .path
-                                    .join(&deletion_state.name)
-                            ))
+                            write_message!(
+                                writer,
+                                ClientMessage::Delete(mem::take(&mut deletion_state.name))
+                            )
                             .await
                             .into_diagnostic()
-                            .wrap_err("Failed to remove directory {}")?;
+                            .wrap_err("Failed to send server deletion message")?;
+                            selection_state.reset();
                         } else {
                             deletion_state
                                 .error_message
@@ -600,14 +598,6 @@ impl App {
                     output.push(display_bytes(&bytes).to_string());
                 }
             }
-            ServerMessage::History(history) => {
-                if let Mode::Console { output, .. } = &mut self.mode {
-                    history
-                        .into_iter()
-                        .for_each(|line| output.push(display_bytes(&line).to_string()));
-                }
-            }
-
             ServerMessage::SynchronizationPayload { online_servers } => {
                 log!("Received payload: {online_servers:?}!");
                 Self::synchronize_servers(&mut self.server_list.servers, &online_servers, vec![]);
