@@ -33,6 +33,7 @@ use crate::{
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
     line_buffer::LineBuffer,
+    log,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
     servers::{self, ServerEntry},
@@ -48,45 +49,6 @@ pub struct App {
     last_area: AbsoluteArea,
     blinking: bool,
     exiting: bool,
-}
-
-#[macro_export]
-macro_rules! log {
-    ($($arg:tt)*) => {{
-        #[cfg(debug_assertions)]
-        use std::io::IsTerminal;
-
-        #[cfg(debug_assertions)]
-        if !std::io::stderr().is_terminal() {
-            eprintln!($($arg)*);
-        }
-    }};
-
-}
-
-macro_rules! log_dbg {
-    ($expression:expr) => {{
-        let object = $expression;
-        log!("{object:?}");
-        object
-    }};
-}
-
-#[macro_export]
-macro_rules! log_bytes {
-    ($bytes:expr) => {{
-        #[cfg(debug_assertions)]
-        use std::io::{self, IsTerminal};
-
-        #[cfg(debug_assertions)]
-        if !io::stderr().is_terminal() {
-            io::stderr()
-                .write_all(&$bytes)
-                .await
-                .into_diagnostic()
-                .wrap_err("Failed to write to stderr")?;
-        }
-    }};
 }
 
 fn log_less_whitespace(object: impl Debug, f: impl Fn(usize) -> usize) {
