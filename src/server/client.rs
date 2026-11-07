@@ -98,7 +98,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             match message {
                 ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
-                ClientMessage::Create { server } => self.create_server(server).await?,
+                ClientMessage::Create { path, .. } => self.create_server(path).await?,
 
                 ClientMessage::Delete { server } => self.delete_server(server).await?,
 
