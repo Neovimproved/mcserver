@@ -58,10 +58,7 @@ pub enum AddingField {
 impl AddingField {
     pub fn prev(&mut self) -> bool {
         *self = match self {
-            AddingField::Name => {
-                *self = AddingField::Software;
-                return true;
-            }
+            AddingField::Name => return true,
             AddingField::Version => AddingField::Name,
             AddingField::Software => AddingField::Version,
         };
@@ -73,10 +70,7 @@ impl AddingField {
         *self = match self {
             AddingField::Name => AddingField::Version,
             AddingField::Version => AddingField::Software,
-            AddingField::Software => {
-                *self = AddingField::Name;
-                return true;
-            }
+            AddingField::Software => return true,
         };
 
         false
