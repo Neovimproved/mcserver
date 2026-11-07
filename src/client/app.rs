@@ -342,7 +342,9 @@ impl App {
                         if deletion_state.name == deletion_state.confirmation {
                             write_message!(
                                 writer,
-                                ClientMessage::Delete(mem::take(&mut deletion_state.name))
+                                ClientMessage::Delete {
+                                    server: mem::take(&mut deletion_state.name)
+                                }
                             )
                             .await
                             .into_diagnostic()
