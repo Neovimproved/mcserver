@@ -179,7 +179,7 @@ impl From<Option<String>> for StartState {
     }
 }
 
-pub fn start(ip_addr: Option<IpAddr>, server_arg: StartState) -> miette::Result<()> {
+pub fn start(tcp_ip: Option<IpAddr>, server_arg: StartState) -> miette::Result<()> {
     let runtime = Runtime::new()
         .into_diagnostic()
         .wrap_err("Failed to create client runtime")?;
@@ -191,7 +191,7 @@ pub fn start(ip_addr: Option<IpAddr>, server_arg: StartState) -> miette::Result<
 
         let mut terminal = GuardedTerminal::new();
 
-        if let Some(ip_addr) = ip_addr {
+        if let Some(ip_addr) = tcp_ip {
             let mut stream = try_connect_tcp(ip_addr).await?;
 
             match server_arg {

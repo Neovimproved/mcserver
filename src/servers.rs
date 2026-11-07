@@ -6,9 +6,14 @@ use std::{
 
 use derive_more::Display;
 use miette::{Context, IntoDiagnostic};
+use ratatui::{
+    style::Stylize,
+    text::{Line, Span, ToSpan},
+};
 use tokio::fs::{self, DirEntry, ReadDir};
 
 use crate::{
+    config::TerminalInterfaceConfig,
     consts::METADATA_DIRECTORY,
     error::{Error, display_path},
 };
@@ -26,6 +31,55 @@ impl ServerGroup {
             name,
             children,
             expanded,
+        }
+    }
+
+    fn find_first_online(&self) -> Option<&ServerObject> {
+        for child in &self.children {
+            match child {
+                ServerEntry::Group(server_group) => {
+                    if let Some(active) = server_group.find_first_online() {
+                        return Some(active);
+                    }
+                }
+                ServerEntry::Object(server_object) => {
+                    if server_object.online {
+                        return Some(server_object);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn fold_to_line<'a>(
+        &'a self,
+        mut spans: Vec<Span<'a>>,
+        is_selected: bool,
+        ti_cfg: &'a TerminalInterfaceConfig,
+    ) -> Line<'a> {
+        spans.push(if self.expanded {
+            ti_cfg
+                .group_expanded_symbol
+                .as_str()
+                .fg(ti_cfg.group_symbol_color)
+        } else {
+            let group_folded_sym = ti_cfg.group_folded_symbol.as_str();
+
+            if self.find_first_online().is_some() {
+                group_folded_sym.fg(ti_cfg.server_online_color)
+            } else {
+                group_folded_sym.fg(ti_cfg.group_symbol_color)
+            }
+        });
+
+        spans.push(Span::from(&self.name));
+
+        if is_selected {
+            Line::from(spans).bg(ti_cfg.selected_color)
+        } else {
+            Line::from(spans)
         }
     }
 }
@@ -48,6 +102,40 @@ impl Display for ServerGroup {
 pub struct ServerObject {
     pub name: String,
     pub online: bool,
+}
+
+impl ServerObject {
+    pub fn fold_to_line<'a>(
+        &'a self,
+        mut spans: Vec<Span<'a>>,
+        is_attached: bool,
+        is_selected: bool,
+        ti_cfg: &'a TerminalInterfaceConfig,
+    ) -> Line<'a> {
+        spans.extend(if self.online || is_attached {
+            [
+                ti_cfg
+                    .server_online_symbol
+                    .as_str()
+                    .fg(ti_cfg.server_online_color),
+                self.name.to_span(),
+            ]
+        } else {
+            [
+                ti_cfg
+                    .server_offline_symbol
+                    .as_str()
+                    .fg(ti_cfg.server_offline_color),
+                self.name.to_span(),
+            ]
+        });
+
+        if is_selected {
+            Line::from(spans).bg(ti_cfg.selected_color)
+        } else {
+            Line::from(spans)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Display)]

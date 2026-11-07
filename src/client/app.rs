@@ -14,14 +14,13 @@ use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
-    text::{Line, Span, ToSpan},
-    widgets::{Block, Borders, List, Paragraph},
+    style::Style,
+    widgets::{Block, Borders, Paragraph},
 };
 use tokio::{
     fs,
     io::{self, AsyncReadExt, AsyncWriteExt},
-    pin,
+    pin, select,
     time::{Sleep, sleep},
 };
 
@@ -30,14 +29,14 @@ use crate::{
         state::{
             AbsoluteArea, AddingField, ConnectionState, Lines, Mode, SelectionState, ServerList,
         },
-        widgets::{Addition, Deletion},
+        widgets::{Addition, Deletion, ServersList},
     },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry, ServerObject},
+    servers::{self, ServerEntry},
     write_message,
 };
 
@@ -314,67 +313,107 @@ impl App {
                     },
                     _ => {}
                 },
-                SelectionState::Adding {
-                    name,
-                    version,
-                    server_software,
-                    field,
-                } => match key.code {
+                SelectionState::Adding(addition_state) => match key.code {
                     KeyCode::Esc => selection_state.reset(),
-                    KeyCode::Char(ch) => match field {
-                        AddingField::Name => name,
-                        AddingField::Version => version,
-                        AddingField::Software => server_software,
+                    KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        match ch {
+                            'h' => {
+                                let input_string = match addition_state.field {
+                                    AddingField::Name => &mut addition_state.name,
+                                    AddingField::Version => &mut addition_state.version,
+                                    AddingField::Software => &mut addition_state.server_software,
+                                };
+
+                                while let Some(last) = input_string.chars().next_back()
+                                    && last == ' '
+                                {
+                                    input_string.pop();
+                                }
+
+                                while let Some(last) = input_string.chars().next_back()
+                                    && last != ' '
+                                {
+                                    input_string.pop();
+                                }
+                            }
+                            'q' => self.exit(),
+                            _ => {}
+                        }
+                    }
+
+                    KeyCode::Char(ch) => match addition_state.field {
+                        AddingField::Name => &mut addition_state.name,
+                        AddingField::Version => &mut addition_state.version,
+                        AddingField::Software => &mut addition_state.server_software,
                     }
                     .push(ch),
                     // TODO: actually create the server here
                     KeyCode::Enter => {
-                        if field.next() {
+                        if addition_state.field.next() {
                             selection_state.reset();
                             todo!();
                         }
                     }
                     KeyCode::Tab => {
-                        field.next();
+                        addition_state.field.next();
                     }
                     KeyCode::BackTab => {
-                        field.prev();
+                        addition_state.field.prev();
                     }
                     KeyCode::Backspace => {
-                        match field {
-                            AddingField::Name => name,
-                            AddingField::Version => version,
-                            AddingField::Software => server_software,
+                        match addition_state.field {
+                            AddingField::Name => &mut addition_state.name,
+                            AddingField::Version => &mut addition_state.version,
+                            AddingField::Software => &mut addition_state.server_software,
                         }
                         .pop();
                     }
                     _ => {}
                 },
-                SelectionState::Deleting {
-                    name,
-                    confirmation,
-                    error_message,
-                    entry_type,
-                } => match key.code {
+                SelectionState::Deleting(deletion_state) => match key.code {
                     KeyCode::Backspace => {
-                        confirmation.pop();
+                        deletion_state.confirmation.pop();
                     }
                     KeyCode::Enter => {
-                        if name == confirmation {
+                        if deletion_state.name == deletion_state.confirmation {
                             fs::remove_dir_all(log_dbg!(
-                                self.config.servers_directory.path.join(name)
+                                self.config
+                                    .servers_directory
+                                    .path
+                                    .join(&deletion_state.name)
                             ))
                             .await
                             .into_diagnostic()
                             .wrap_err("Failed to remove directory {}")?;
                         } else {
-                            error_message.insert(format!("Failed to rename {entry_type}"));
+                            deletion_state
+                                .error_message
+                                .insert(format!("Failed to rename {}", deletion_state.entry_type));
                         }
                     }
                     KeyCode::Delete => todo!(
                         "Delete char is not yet implemented in deletion mode yet unfortunately"
                     ),
-                    KeyCode::Char(ch) => confirmation.push(ch),
+                    KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        match ch {
+                            'h' => {
+                                while let Some(ch) = deletion_state.confirmation.chars().next_back()
+                                    && ch == ' '
+                                {
+                                    deletion_state.confirmation.pop();
+                                }
+
+                                while let Some(ch) = deletion_state.confirmation.chars().next_back()
+                                    && ch != ' '
+                                {
+                                    deletion_state.confirmation.pop();
+                                }
+                            }
+                            'q' => self.exit(),
+                            _ => {}
+                        }
+                    }
+                    KeyCode::Char(ch) => deletion_state.confirmation.push(ch),
                     KeyCode::Esc => selection_state.reset(),
                     _ => {}
                 },
@@ -629,7 +668,7 @@ impl App {
                     .wrap_err("Failed to render tui")?;
             }
 
-            redraw = tokio::select! {
+            redraw = select! {
                 event = &mut event_reader.next() => {
                     let Some(event) = event else {
                         bail!("Failed to read from terminal");
@@ -741,163 +780,6 @@ impl App {
         }
     }
 
-    fn find_first_online(children: &[ServerEntry]) -> Option<&ServerObject> {
-        for child in children {
-            match child {
-                ServerEntry::Group(server_group) => {
-                    if let Some(active) = Self::find_first_online(&server_group.children) {
-                        return Some(active);
-                    }
-                }
-                ServerEntry::Object(server_object) => {
-                    if server_object.online {
-                        return Some(server_object);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn draw_entries<'a>(
-        &'a self,
-        entries: &'a [ServerEntry],
-        accumulator: &mut Vec<Line<'a>>,
-        base_indentation: &str,
-        counter: &mut usize,
-        attached: usize,
-    ) {
-        for (idx, entry) in entries.iter().enumerate() {
-            const CONTINUATION: &str = "├╴";
-            const END: &str = "└╴";
-
-            let mut spans = match (
-                *counter == self.server_list.selected,
-                idx == entries.len() - 1,
-            ) {
-                (true, last) => {
-                    let trimmed_indentation = if let Some(ch) = base_indentation.chars().next() {
-                        format!(
-                            "{}{}",
-                            &base_indentation[ch.len_utf8()..],
-                            if last { END } else { CONTINUATION }
-                        )
-                    } else {
-                        if last { END } else { CONTINUATION }
-                            .chars()
-                            .skip(1)
-                            .collect::<String>()
-                    };
-
-                    vec!["❯".to_span(), Span::from(trimmed_indentation)]
-                }
-                (false, true) => {
-                    vec![Span::from(format!("{base_indentation}{END}"))]
-                }
-                (false, false) => {
-                    vec![Span::from(format!("{base_indentation}{CONTINUATION}"))]
-                }
-            };
-
-            match entry {
-                ServerEntry::Group(server_group) => {
-                    spans.push(if server_group.expanded {
-                        self.ti_cfg()
-                            .group_expanded_symbol
-                            .as_str()
-                            .fg(self.ti_cfg().group_symbol_color)
-                    } else {
-                        let group_folded_sym = self.ti_cfg().group_folded_symbol.as_str();
-
-                        if Self::find_first_online(&server_group.children).is_some() {
-                            group_folded_sym.fg(self.ti_cfg().server_online_color)
-                        } else {
-                            group_folded_sym.fg(self.ti_cfg().group_symbol_color)
-                        }
-                    });
-
-                    spans.push(Span::from(&server_group.name));
-
-                    let line = if *counter == self.server_list.selected {
-                        Line::from(spans).bg(self.ti_cfg().selected_color)
-                    } else {
-                        Line::from(spans)
-                    };
-
-                    accumulator.push(line);
-
-                    *counter += 1;
-
-                    if server_group.expanded {
-                        self.draw_entries(
-                            &server_group.children,
-                            accumulator,
-                            &format!("{base_indentation}│   "),
-                            counter,
-                            attached,
-                        );
-                    }
-                }
-
-                ServerEntry::Object(server_object) => {
-                    spans.extend(if server_object.online || *counter == attached {
-                        [
-                            self.ti_cfg()
-                                .server_online_symbol
-                                .as_str()
-                                .fg(self.ti_cfg().server_online_color),
-                            server_object.name.to_span(),
-                        ]
-                    } else {
-                        [
-                            self.ti_cfg()
-                                .server_offline_symbol
-                                .as_str()
-                                .fg(self.ti_cfg().server_offline_color),
-                            server_object.name.to_span(),
-                        ]
-                    });
-
-                    let line = if *counter == self.server_list.selected {
-                        Line::from(spans).bg(self.ti_cfg().selected_color)
-                    } else {
-                        Line::from(spans)
-                    };
-
-                    accumulator.push(line);
-
-                    *counter += 1;
-                }
-            }
-        }
-    }
-
-    fn draw_servers_list_widget(&self) -> List<'_> {
-        let mut counter = 0;
-
-        let mut lines = vec![];
-
-        self.draw_entries(
-            &self.server_list.servers,
-            &mut lines,
-            "",
-            &mut counter,
-            match self.mode {
-                Mode::Console {
-                    attached_server, ..
-                } => attached_server,
-                _ => usize::MAX,
-            },
-        );
-
-        // 2 because of the top and bottom border
-        // Extra 1 to make it representative of an index
-
-        List::new(lines.into_iter().skip(self.server_list.scroll))
-            .block(Block::new().title("Servers").borders(Borders::ALL))
-    }
-
     fn draw_output_widget<'a>(
         &self,
         output_area: AbsoluteArea,
@@ -935,8 +817,11 @@ impl App {
     }
 
     fn center_horizontal(area: Rect, x_percent: u16) -> Rect {
-        Layout::horizontal([50 - x_percent / 2, x_percent].map(Constraint::Percentage)).split(area)
-            [1]
+        Layout::horizontal([
+            Constraint::Percentage(50 - x_percent / 2),
+            Constraint::Percentage(x_percent),
+        ])
+        .split(area)[1]
     }
 
     fn render(&self, frame: &mut Frame) -> AbsoluteArea {
@@ -952,16 +837,16 @@ impl App {
 
         match &self.mode {
             Mode::Selecting(selection_state) => {
-                frame.render_widget(self.draw_servers_list_widget(), frame_area);
+                frame.render_widget(
+                    ServersList::new(&self.server_list.servers, self.ti_cfg())
+                        .selected(self.server_list.selected)
+                        .scroll(self.server_list.scroll),
+                    frame_area,
+                );
 
                 match selection_state {
                     SelectionState::Normal => {}
-                    SelectionState::Adding {
-                        name,
-                        version,
-                        server_software,
-                        field,
-                    } => {
+                    SelectionState::Adding(addition_state) => {
                         let addition_area = Layout::vertical([
                             Constraint::Length((frame_area.height - 9) / 2),
                             Constraint::Length(9),
@@ -969,43 +854,26 @@ impl App {
                         .split(Self::center_horizontal(frame.area(), 90))[1];
 
                         frame.render_widget(
-                            Addition::new(
-                                name,
-                                version,
-                                server_software,
-                                *field,
-                                self.blinking,
-                                addition_area.width.saturating_sub(2),
-                            ),
+                            Addition::new(addition_state).blinking(self.blinking),
                             addition_area,
                         );
                     }
-                    SelectionState::Deleting {
-                        name,
-                        confirmation,
-                        error_message,
-                        entry_type,
-                    } => {
-                        let horizontal_layout = Self::center_horizontal(frame_area, 90);
-                        frame.render_widget(
-                            Deletion::new(
-                                name,
-                                confirmation,
-                                error_message,
-                                *entry_type,
-                                self.blinking,
-                                self.ti_cfg().background_color.unwrap_or(Color::Reset),
-                                horizontal_layout.width.saturating_sub(2),
-                            ),
-                            Layout::vertical(
-                                [
-                                    (frame_area.height - DELETION_WIDGET_LINES) / 2,
-                                    DELETION_WIDGET_LINES,
-                                ]
-                                .map(Constraint::Length),
-                            )
-                            .split(horizontal_layout)[1],
-                        );
+                    SelectionState::Deleting(deletion_state) => {
+                        const DELETION_WIDGET_WIDTH_PERCENT: u16 = 90;
+
+                        let area = Layout::vertical([
+                            Constraint::Length((frame_area.height - DELETION_WIDGET_LINES) / 2),
+                            Constraint::Length(DELETION_WIDGET_LINES),
+                        ])
+                        .split(Self::center_horizontal(
+                            frame_area,
+                            DELETION_WIDGET_WIDTH_PERCENT,
+                        ))[1];
+
+                        let deletion_widget =
+                            Deletion::new(deletion_state, self.blinking, self.ti_cfg());
+
+                        frame.render_widget(deletion_widget, area);
                     }
                 }
             }
@@ -1014,6 +882,7 @@ impl App {
                 input,
                 output,
                 state,
+                attached_server,
                 ..
             } => {
                 let output_area = if matches!(state, ConnectionState::Escaping) {
@@ -1021,7 +890,13 @@ impl App {
                         Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                             .split(frame.area());
 
-                    frame.render_widget(self.draw_servers_list_widget(), main_sections[0]);
+                    frame.render_widget(
+                        ServersList::new(&self.server_list.servers, self.ti_cfg())
+                            .attached(*attached_server)
+                            .selected(self.server_list.selected)
+                            .scroll(self.server_list.scroll),
+                        main_sections[0],
+                    );
 
                     main_sections[1]
                 } else {

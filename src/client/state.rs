@@ -142,20 +142,26 @@ impl FromStr for Version {
 }
 
 #[derive(Debug)]
+pub struct AdditionState {
+    pub name: String,
+    pub version: String,
+    pub server_software: String,
+    pub field: AddingField,
+}
+
+#[derive(Debug)]
+pub struct DeletionState {
+    pub name: String,
+    pub confirmation: String,
+    pub error_message: TempMessage,
+    pub entry_type: ServerEntryType,
+}
+
+#[derive(Debug)]
 pub enum SelectionState {
     Normal,
-    Adding {
-        name: String,
-        version: String,
-        server_software: String,
-        field: AddingField,
-    },
-    Deleting {
-        name: String,
-        confirmation: String,
-        error_message: TempMessage,
-        entry_type: ServerEntryType,
-    },
+    Adding(AdditionState),
+    Deleting(DeletionState),
 }
 
 impl SelectionState {
@@ -164,21 +170,21 @@ impl SelectionState {
     }
 
     pub fn adding() -> Self {
-        Self::Adding {
+        Self::Adding(AdditionState {
             name: String::new(),
             version: String::new(),
             server_software: String::new(),
             field: AddingField::Name,
-        }
+        })
     }
 
     pub fn deleting(entry: &ServerEntry) -> Self {
-        Self::Deleting {
+        Self::Deleting(DeletionState {
             name: entry.name().to_string(),
             entry_type: entry.ty(),
             confirmation: "".to_string(),
             error_message: TempMessage::new(Duration::from_secs(2)),
-        }
+        })
     }
 }
 
