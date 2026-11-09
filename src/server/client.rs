@@ -14,7 +14,7 @@ use crate::{
     messages::{ClientMessage, ServerInstruction, ServerMessage},
     read_message,
     server::{
-        runtime::{initialize_server, make_synchronization_payload},
+        runtime::initialize_server,
         types::{Request, ServerCommunicator},
     },
     write_bytes, write_message,
@@ -75,7 +75,13 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     async fn send_synchronization_payload(&mut self) -> Result<()> {
-        let message = make_synchronization_payload(self.server_communicators);
+        let message = ServerMessage::SynchronizationPayload {
+            online_servers: self
+                .server_communicators
+                .iter()
+                .map(|pair| pair.key().clone())
+                .collect(),
+        };
 
         let writer = &mut self.writer;
         write_message!(writer, message)

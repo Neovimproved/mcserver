@@ -30,137 +30,6 @@ use crate::{
     },
 };
 
-async fn spawn_server_process(
-    name: &str,
-    config: &'static RwLock<Config>,
-    additional_flags: &[String],
-) -> Result<(Pty, Child)> {
-    let (pty, pts) = pty_process::open()?;
-    pty.resize(pty_process::Size::new(24, 80))?;
-
-    let config_guard = config.read().await;
-
-    let flags = if additional_flags.is_empty() {
-        Cow::Borrowed(&config_guard.default_java_args)
-    } else {
-        let mut flags = config_guard.default_java_args.clone();
-        flags.extend_from_slice(additional_flags);
-        Cow::Owned(flags)
-    };
-
-    let server_path = config_guard.servers_directory.path.join(name);
-
-    let child = Command::new("java")
-        .arg("-jar")
-        .arg(metadata::get_jar_file(&server_path).await?)
-        .args(flags.as_ref())
-        .current_dir(server_path)
-        .spawn(pts)?;
-
-    // pts (slave thing) can be dropped
-    Ok((pty, child))
-}
-
-async fn start_server(
-    Server {
-        config,
-        name,
-        message_receiver,
-        request_receiver,
-        sender,
-        server_communicators,
-    }: &mut Server,
-) -> Result<()> {
-    let mut history: LineBuffer<Vec<u8>> = LineBuffer::new();
-
-    // TODO: allow additional flags
-    let (mut pty, mut child) = spawn_server_process(name, config, &[])
-        .await
-        .wrap_err("Failed to spawn server process")?;
-
-    let _ = sender.send(bitcode::encode(&make_synchronization_payload(
-        server_communicators,
-    )));
-
-    let mut stdout_finished = false;
-
-    loop {
-        let mut stdout_buf = [0u8; 1024];
-
-        select! {
-            res = child.wait() => {
-                // Server closed
-                res?;
-                break;
-            },
-
-            res = pty.read(&mut stdout_buf), if !stdout_finished => {
-                let count = res?;
-
-                if count == 0 {
-                    stdout_finished = true;
-                    continue;
-                }
-
-                let bytes_read = &stdout_buf[..count];
-
-                history.push(bytes_read.to_owned());
-
-                let _ = sender.send(bitcode::encode(&ServerMessage::Output(bytes_read.to_owned())));
-                continue;
-            }
-
-            message = message_receiver.recv() => {
-                let Some(message) = message else {
-                    continue;
-                };
-
-                match message {
-                    ServerInstruction::Kill => {
-                        match child.kill().await {
-                            Ok(()) => {
-                                sender.send(bitcode::encode(&ServerMessage::Closed))?;
-                                break;
-                            }
-                            Err(err) => {
-                                sender.send(bitcode::encode(&ServerMessage::KillFailure(err.to_string())))?;
-                                return Err(eyre!("Failed to kill server"));
-                            }
-                        };
-                    }
-                    ServerInstruction::SendInput(bytes) => {
-                        pty.write_all(&bytes).await?;
-                        pty.flush().await.wrap_err("Failed to flush")?;
-                    }
-                }
-            }
-
-            request = request_receiver.recv() => {
-                let Some(request) = request else {
-                    continue;
-                };
-
-                let _ = match request {
-                    Request::GetHistory(sender) => sender.send(history.clone()).inspect_err(|_| eprintln!("Failed to send history")),
-                };
-            }
-        };
-    }
-
-    Ok(())
-}
-
-pub fn make_synchronization_payload(
-    server_communicators: &'static DashMap<String, ServerCommunicator>,
-) -> ServerMessage {
-    ServerMessage::SynchronizationPayload {
-        online_servers: server_communicators
-            .iter()
-            .map(|pair| pair.key().clone())
-            .collect(),
-    }
-}
-
 struct Server {
     config: &'static RwLock<Config>,
     name: String,
@@ -168,17 +37,151 @@ struct Server {
     request_receiver: UnboundedReceiver<Request>,
     sender: broadcast::Sender<Vec<u8>>,
     server_communicators: &'static DashMap<String, ServerCommunicator>,
+    history: LineBuffer<Vec<u8>>,
+}
+
+impl Server {
+    fn new(
+        config: &'static RwLock<Config>,
+        name: String,
+        message_receiver: UnboundedReceiver<ServerInstruction>,
+        request_receiver: UnboundedReceiver<Request>,
+        sender: broadcast::Sender<Vec<u8>>,
+        server_communicators: &'static DashMap<String, ServerCommunicator>,
+    ) -> Self {
+        Self {
+            config,
+            name,
+            message_receiver,
+            request_receiver,
+            sender,
+            server_communicators,
+            history: LineBuffer::new(),
+        }
+    }
+
+    pub fn synchronize_clients(&mut self) {
+        let payload = ServerMessage::SynchronizationPayload {
+            online_servers: self
+                .server_communicators
+                .iter()
+                .map(|pair| pair.key().clone())
+                .collect(),
+        };
+
+        let _ = self.sender.send(bitcode::encode(&payload));
+    }
+
+    pub async fn spawn_process(&self) -> Result<(Pty, Child)> {
+        let (pty, pts) = pty_process::open()?;
+        pty.resize(pty_process::Size::new(24, 80))?;
+
+        let config_guard = self.config.read().await;
+
+        let additional_args = [];
+
+        let flags = if additional_args.is_empty() {
+            Cow::Borrowed(&config_guard.default_java_args)
+        } else {
+            let mut flags = config_guard.default_java_args.clone();
+            flags.extend_from_slice(&additional_args);
+            Cow::Owned(flags)
+        };
+
+        let server_path = config_guard.servers_directory.path.join(&self.name);
+
+        let child = Command::new("java")
+            .arg("-jar")
+            .arg(metadata::get_jar_file(&server_path).await?)
+            .args(flags.as_ref())
+            .current_dir(server_path)
+            .spawn(pts)?;
+
+        // pts (slave thing) can be dropped
+        Ok((pty, child))
+    }
+
+    pub async fn start(&mut self) -> Result<()> {
+        // TODO: allow additional flags
+        let (mut pty, mut child) = self
+            .spawn_process()
+            .await
+            .wrap_err("Failed to spawn server process")?;
+
+        self.synchronize_clients();
+
+        loop {
+            let mut output_buf = [0u8; 1024];
+
+            select! {
+                res = child.wait() => {
+                    // Server closed
+                    res?;
+                    break;
+                },
+
+                res = pty.read(&mut output_buf) => {
+                    let count = res.wrap_err("Failed to read from pty")?;
+
+                    if count == 0 {
+                        break;
+                    }
+
+                    let bytes_read = &output_buf[..count];
+
+                    self.history.push(bytes_read.to_owned());
+
+                    let _ = self.sender.send(bitcode::encode(&ServerMessage::Output(bytes_read.to_owned())));
+                }
+
+                message = self.message_receiver.recv() => {
+                    let Some(message) = message else {
+                        break;
+                    };
+
+                    match message {
+                        ServerInstruction::Kill => {
+                            match child.kill().await {
+                                Ok(()) => {
+                                    self.sender.send(bitcode::encode(&ServerMessage::Closed))?;
+                                    break;
+                                }
+                                Err(err) => {
+                                    self.sender
+                                        .send(bitcode::encode(&ServerMessage::KillFailure(
+                                                    err.to_string(),
+                                        )))?;
+                                    return Err(eyre!("Failed to kill server"));
+                                }
+                            };
+                        }
+                        ServerInstruction::SendInput(bytes) => {
+                            pty.write_all(&bytes).await?;
+                            pty.flush().await.wrap_err("Failed to flush")?;
+                        }
+                    }
+                }
+
+                request = self.request_receiver.recv() => {
+                    let Some(request) = request else {
+                        continue;
+                    };
+
+                    let _ = match request {
+                        Request::GetHistory(sender) => sender.send(self.history.clone()).inspect_err(|_| eprintln!("Failed to send history")),
+                    };
+                }
+            };
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
         self.server_communicators.remove(&self.name);
-
-        let _ = self
-            .sender
-            .send(bitcode::encode(&make_synchronization_payload(
-                self.server_communicators,
-            )));
+        self.synchronize_clients();
     }
 }
 
@@ -192,16 +195,16 @@ async fn server_lifecycle(
 ) -> Result<()> {
     println!("Starting {name}");
 
-    let mut server = Server {
+    let mut server = Server::new(
         config,
         name,
         message_receiver,
         request_receiver,
         sender,
         server_communicators,
-    };
+    );
 
-    let res = start_server(&mut server).await;
+    let res = server.start().await;
 
     if let Err(err) = &res {
         eprintln!("Server: {} btwwwwww\n{err:?}", server.name);
