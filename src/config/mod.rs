@@ -165,7 +165,7 @@ pub struct Config {
     pub default_java_args: Vec<String>,
     pub servers_directory: ServersDirectory,
     pub aliases: HashMap<String, String>,
-    pub auto_restart: Option<usize>,
+    pub auto_restart: bool,
     pub terminal_interface: TerminalInterfaceConfig,
 }
 

@@ -72,19 +72,24 @@ impl Server {
         let _ = self.sender.send(bitcode::encode(&payload));
     }
 
+    async fn get_additional_args(&self) -> Result<Vec<String>> {
+        // TODO: parse them from .mcserver/args.txt or something like this
+        Ok(vec![])
+    }
+
     pub async fn spawn_process(&self) -> Result<(Pty, Child)> {
         let (pty, pts) = pty_process::open()?;
         pty.resize(pty_process::Size::new(24, 80))?;
 
         let config_guard = self.config.read().await;
 
-        let additional_args = [];
+        let additional_args: Vec<String> = self.get_additional_args().await?;
 
         let flags = if additional_args.is_empty() {
             Cow::Borrowed(&config_guard.default_java_args)
         } else {
             let mut flags = config_guard.default_java_args.clone();
-            flags.extend_from_slice(&additional_args);
+            flags.extend(additional_args);
             Cow::Owned(flags)
         };
 
@@ -121,7 +126,22 @@ impl Server {
                 },
 
                 res = pty.read(&mut output_buf) => {
-                    let count = res.wrap_err("Failed to read from pty")?;
+                    let count = match res {
+                        Ok(count) => count,
+                        // 5 == EIO, which should mean that the server closed pretty much
+                        Err(err) if err.raw_os_error() == Some(5) => {
+                            if self.config.read().await.auto_restart {
+                                println!("Restarting {}", self.name);
+                                (pty, child) = self.spawn_process()
+                                    .await
+                                    .wrap_err("Failed to spawn server process")?;
+                                continue;
+                            } else {
+                                break;
+                            }
+                        },
+                        Err(err) => return Err(err).wrap_err("Failed to read from pty"),
+                    };
 
                     if count == 0 {
                         break;
@@ -206,19 +226,15 @@ async fn server_lifecycle(
 
     let res = server.start().await;
 
-    if let Err(err) = &res {
-        eprintln!("Server: {} btwwwwww\n{err:?}", server.name);
+    if let Err(err) = res {
+        eprintln!("Server {} ended with error\n{err:?}", server.name);
+    } else {
+        println!("Server {} closed", server.name);
     }
 
     metadata::update_last_used(metadata::dir(&server.name))
         .await
         .wrap_err("Failed to update metadata")?;
-
-    if let Err(err) = &res {
-        eprintln!("Server {} ended with error\n{err:?}", server.name);
-    } else {
-        println!("Server {} closed", server.name);
-    }
 
     Ok(())
 }

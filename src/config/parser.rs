@@ -268,12 +268,9 @@ pub fn parse_config(document: &KdlDocument) -> Result<Config> {
 
     let auto_restart = document
         .get(Keys::AUTO_RESTART)
-        .map(|node| {
-            parse_value(node, Keys::AUTO_RESTART, |val| {
-                val.as_integer().map(|x| x as usize)
-            })
-        })
-        .transpose()?;
+        .map(|node| parse_value(node, Keys::AUTO_RESTART, |val| val.as_bool()))
+        .transpose()?
+        .unwrap_or_default();
 
     let terminal_interface = parse_ti_config(document.get(Keys::TERIMNAL_INTERFACE))?;
 
