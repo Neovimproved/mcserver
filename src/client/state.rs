@@ -135,26 +135,30 @@ impl ConnectionState {
 }
 
 #[derive(Debug)]
+pub struct Console {
+    pub attached_server: usize,
+    #[allow(dead_code)]
+    pub path: String,
+    pub input: String,
+    pub output: LineBuffer,
+    pub state: ConnectionState,
+}
+
+#[derive(Debug)]
 pub enum Mode {
     Selecting(SelectionState),
-    Console {
-        attached_server: usize,
-        path: String,
-        input: String,
-        output: LineBuffer,
-        state: ConnectionState,
-    },
+    Console(Console),
 }
 
 impl Mode {
     pub fn output(index: usize, path: String) -> Self {
-        Self::Console {
+        Self::Console(Console {
             attached_server: index,
             path,
             input: String::new(),
             output: LineBuffer::new(),
             state: ConnectionState::Normal,
-        }
+        })
     }
 }
 

@@ -220,6 +220,51 @@ impl App {
         Ok(())
     }
 
+    async fn list_motion(
+        &mut self,
+        key: KeyEvent,
+        mut writer: impl AsyncWriteExt + Unpin,
+    ) -> miette::Result<()> {
+        match key.code {
+            KeyCode::Enter => self
+                .try_select(writer)
+                .await
+                .wrap_err("Failed to attach to server")?,
+
+            KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_down();
+            }
+
+            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.scroll_up();
+            }
+
+            KeyCode::Char('g') => self.server_list.selected = 0,
+            KeyCode::Char('G') => self.selection_bottom(),
+
+            // for debugging things
+            #[cfg(debug_assertions)]
+            KeyCode::Char('d') => {
+                log_less_whitespace(&self.server_list.servers, |n| n / 2);
+                log!("Position: {}", self.server_list.selected);
+            }
+
+            KeyCode::Char('q') => self.exit(),
+
+            KeyCode::Char('s') => write_message!(writer, ClientMessage::SynchronizationRequest)
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to make synchronization request")?,
+
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     pub async fn handle_keycode(
         &mut self,
         key: KeyEvent,
@@ -228,54 +273,31 @@ impl App {
         match &mut self.mode {
             Mode::Selecting(selection_state) => match selection_state {
                 SelectionState::Normal => match key.code {
-                    KeyCode::Enter => self
-                        .try_select(&mut writer)
-                        .await
-                        .wrap_err("Failed to select item")?,
-                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+                    KeyCode::Char('a') => *selection_state = SelectionState::adding(),
 
-                    KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_down();
+                    KeyCode::Char('D') => {
+                        if let Some(entry) =
+                            Self::get_selected(&self.server_list.servers, self.server_list.selected)
+                        {
+                            *selection_state = SelectionState::deleting(entry);
+                        };
                     }
 
-                    KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_up();
+                    // for debugging things
+                    #[cfg(debug_assertions)]
+                    KeyCode::Char('d') => {
+                        log_less_whitespace(&self.server_list.servers, |n| n / 2);
+                        log!("Position: {}", self.server_list.selected);
                     }
 
-                    KeyCode::Char('g') => self.server_list.selected = 0,
-                    KeyCode::Char('G') => self.selection_bottom(),
-
-                    KeyCode::Esc => self.exit(),
-                    KeyCode::Char(ch) => match ch {
-                        'a' => *selection_state = SelectionState::adding(),
-
-                        'D' => {
-                            if let Some(entry) = Self::get_selected(
-                                &self.server_list.servers,
-                                self.server_list.selected,
-                            ) {
-                                *selection_state = SelectionState::deleting(entry);
-                            };
-                        }
-
-                        // for debugging things
-                        #[cfg(debug_assertions)]
-                        'd' => {
-                            log_less_whitespace(&self.server_list.servers, |n| n / 2);
-                            log!("Position: {}", self.server_list.selected);
-                        }
-
-                        'q' => self.exit(),
-
-                        's' => write_message!(writer, ClientMessage::SynchronizationRequest)
+                    KeyCode::Char('s') => {
+                        write_message!(writer, ClientMessage::SynchronizationRequest)
                             .await
                             .into_diagnostic()
-                            .wrap_err("Failed to make synchronization request")?,
+                            .wrap_err("Failed to make synchronization request")?
+                    }
 
-                        _ => {}
-                    },
-                    _ => {}
+                    _ => self.list_motion(key, writer).await?,
                 },
                 SelectionState::Adding(addition_state) => match key.code {
                     KeyCode::Esc => selection_state.reset(),
@@ -384,55 +406,42 @@ impl App {
                 },
             },
 
-            Mode::Console {
-                state: ConnectionState::Dead,
-                ..
-            } => match key.code {
+            Mode::Console(console) if let ConnectionState::Dead = console.state => match key.code {
                 KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::BackTab => {
                     self.selection_mode()
                 }
-                _ => {}
+                _ => self.list_motion(key, writer).await?,
             },
 
             // Escaping output
-            Mode::Console {
-                path: name, state, ..
-            } if let ConnectionState::Escaping = state => match key.code {
-                // KeyCode::Backspace => todo!(),
-                KeyCode::Enter => self
-                    .try_select(writer)
-                    .await
-                    .wrap_err("Failed to attach to server")?,
-                KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
+            Mode::Console(console) if let ConnectionState::Escaping = console.state => {
+                match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
+                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
-                KeyCode::Tab => state.reset(),
+                    KeyCode::Tab => console.state.reset(),
 
-                KeyCode::BackTab => self.selection_mode(),
+                    KeyCode::BackTab => self.selection_mode(),
 
-                // KeyCode::Delete => todo!(),
-                // KeyCode::Insert => todo!(),
-                // KeyCode::F(_) => todo!(),
-                KeyCode::Char('q') => self.exit(),
+                    KeyCode::Char(':') => {
+                        // TODO: implement commands
+                    }
 
-                KeyCode::Char(':') => {
-                    // TODO: implement commands
+                    KeyCode::Esc => self.selection_mode(),
+                    _ => {}
                 }
+            }
 
-                KeyCode::Esc => self.selection_mode(),
-                _ => {}
-            },
-
-            Mode::Console { input, state, .. } => match key.code {
+            Mode::Console(console) => match key.code {
                 KeyCode::Backspace => {
-                    input.pop();
+                    console.input.pop();
                 }
                 KeyCode::Enter => {
-                    input.push('\n');
+                    console.input.push('\n');
 
                     write_message!(
                         writer,
-                        ClientMessage::ProgramInput(mem::take(input).into_bytes())
+                        ClientMessage::ProgramInput(mem::take(&mut console.input).into_bytes())
                     )
                     .await
                     .into_diagnostic()
@@ -443,7 +452,7 @@ impl App {
                     .into_diagnostic()
                     .wrap_err("Failed to send tab to server")?,
                 KeyCode::BackTab => {
-                    *state = ConnectionState::Escaping;
+                    console.state = ConnectionState::Escaping;
                 }
                 KeyCode::Char(ch) => {
                     if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -454,11 +463,11 @@ impl App {
                         .await
                         .into_diagnostic()?;
                     } else {
-                        input.push(ch);
+                        console.input.push(ch);
                     }
                 }
                 KeyCode::Esc => {
-                    *state = ConnectionState::Escaping;
+                    console.state = ConnectionState::Escaping;
                 }
                 _ => {}
             },
@@ -538,16 +547,16 @@ impl App {
                 log!("The server has already started apparently");
             }
             ServerMessage::Closed => {
-                if let Mode::Console { input, state, .. } = &mut self.mode {
-                    *input = "Press enter to return...".to_string();
-                    *state = ConnectionState::Dead;
+                if let Mode::Console(console) = &mut self.mode {
+                    console.input = "Press enter to return...".to_string();
+                    console.state = ConnectionState::Dead;
                 }
             }
             ServerMessage::History(history) => {
-                if let Mode::Console { output, .. } = &mut self.mode {
+                if let Mode::Console(console) = &mut self.mode {
                     history
                         .into_iter()
-                        .for_each(|line| output.push(display_bytes(&line).to_string()));
+                        .for_each(|line| console.output.push(display_bytes(&line).to_string()));
                 }
             }
             ServerMessage::KillFailure(err) => log!("Failed to kill child: {err}"),
@@ -558,8 +567,8 @@ impl App {
                 log!("The server has not yet started apparently");
             }
             ServerMessage::Output(bytes) => {
-                if let Mode::Console { output, .. } = &mut self.mode {
-                    output.push(display_bytes(&bytes).to_string());
+                if let Mode::Console(console) = &mut self.mode {
+                    console.output.push(display_bytes(&bytes).to_string());
                 }
             }
             ServerMessage::SynchronizationPayload { online_servers } => {
@@ -828,21 +837,15 @@ impl App {
                 }
             }
 
-            Mode::Console {
-                input,
-                output,
-                state,
-                attached_server,
-                ..
-            } => {
-                let output_area = if matches!(state, ConnectionState::Escaping) {
+            Mode::Console(console) => {
+                let output_area = if matches!(console.state, ConnectionState::Escaping) {
                     let main_sections =
                         Layout::horizontal([Constraint::Length(30), Constraint::Fill(1)])
                             .split(frame.area());
 
                     frame.render_widget(
                         ServersList::new(&self.server_list.servers, self.ti_cfg())
-                            .attached(*attached_server)
+                            .attached(console.attached_server)
                             .selected(self.server_list.selected)
                             .scroll(self.server_list.scroll),
                         main_sections[0],
@@ -853,7 +856,8 @@ impl App {
                     frame.area()
                 };
 
-                let widget = self.draw_output_widget(output_area.into(), input, output);
+                let widget =
+                    self.draw_output_widget(output_area.into(), &console.input, &console.output);
 
                 frame.render_widget(widget, output_area);
             }
