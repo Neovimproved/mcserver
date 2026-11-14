@@ -350,7 +350,10 @@ pub async fn main() -> Result<()> {
                         println!("OK, stopping");
                         break;
                     }
-                    _ => eprintln!("I don't understand"),
+                    "clear" => {
+                        println!("\x1b[2J\x1b[H");
+                    }
+                    _ => eprintln!("I don't understand '{}'", &buf[..buf.len()-1]),
                 }
             }
 
