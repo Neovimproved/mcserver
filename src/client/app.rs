@@ -242,7 +242,7 @@ impl App {
                 self.scroll_up();
             }
 
-            KeyCode::Char('g') => self.server_list.selected = 0,
+            KeyCode::Char('g') => self.selection_top(),
             KeyCode::Char('G') => self.selection_bottom(),
 
             // for debugging things
@@ -870,20 +870,6 @@ impl App {
         self.mode = Mode::Selecting(SelectionState::Normal);
     }
 
-    fn selection_up(&mut self) {
-        if self.server_list.selected == 0 {
-            self.server_list.selected =
-                Self::count_len(&self.server_list.servers).saturating_sub(1);
-            return;
-        }
-
-        self.server_list.selected -= 1;
-
-        if self.server_list.scroll > self.server_list.selected {
-            self.server_list.scroll = self.server_list.selected;
-        }
-    }
-
     fn count_len(entries: &[ServerEntry]) -> usize {
         let mut len = 0;
 
@@ -903,11 +889,24 @@ impl App {
         len
     }
 
+    fn selection_up(&mut self) {
+        if self.server_list.selected == 0 {
+            self.selection_bottom();
+            return;
+        }
+
+        self.server_list.selected -= 1;
+
+        if self.server_list.scroll > self.server_list.selected {
+            self.server_list.scroll = self.server_list.selected;
+        }
+    }
+
     fn selection_down(&mut self) {
         let length = Self::count_len(&self.server_list.servers);
 
         if self.server_list.selected >= length.saturating_sub(1) {
-            self.server_list.selected = 0;
+            self.selection_top();
             return;
         }
 
@@ -921,8 +920,19 @@ impl App {
         }
     }
 
+    fn selection_top(&mut self) {
+        self.server_list.selected = 0;
+        self.server_list.scroll = 0;
+    }
+
     fn selection_bottom(&mut self) {
-        self.server_list.selected = Self::count_len(&self.server_list.servers).saturating_sub(1);
+        let length = Self::count_len(&self.server_list.servers);
+        self.server_list.selected = length.saturating_sub(1);
+
+        self.server_list.scroll = self
+            .server_list
+            .scroll
+            .max(length.saturating_sub(self.last_area.height.saturating_sub(2)));
     }
 
     fn scroll_up(&mut self) {
