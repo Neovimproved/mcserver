@@ -21,6 +21,7 @@ mod config;
 mod consts;
 mod creator;
 mod error;
+mod http;
 mod line_buffer;
 mod macros;
 mod messages;

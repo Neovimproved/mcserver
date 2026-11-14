@@ -3,7 +3,10 @@ use std::{borrow::Cow, collections::HashSet};
 use bitcode::{Decode, Encode};
 use derive_more::Display;
 
-use crate::line_buffer::LineBuffer;
+use crate::{
+    creator::{ServerSoftware, Version},
+    line_buffer::LineBuffer,
+};
 
 fn terminal_like_bytes(bytes: &str, normal_end: usize) -> String {
     let mut acc = String::from(&bytes[..normal_end]);
@@ -87,21 +90,29 @@ pub enum ServerMessage {
 }
 
 #[derive(Debug, Decode, Display, Encode)]
+#[display("Create server with path `{path}`, software `{server_software}`, version `{}`", version.map(|v| v.to_string()).as_deref().unwrap_or("latest") )]
+pub struct CreateMessage {
+    pub path: String,
+    pub server_software: ServerSoftware,
+    pub version: Option<Version>,
+}
+
+#[derive(Debug, Decode, Display, Encode)]
 pub enum ClientMessage {
     #[display("Attach to server {server}")]
-    Attach { server: String },
-
-    #[display("Create server with path {path}")]
-    Create {
-        path: String,
-        server_software: String,
+    Attach {
+        server: String,
     },
+
+    Create(CreateMessage),
 
     #[display("Detach from the current server")]
     Detach,
 
     #[display("Delete server with path {server}")]
-    Delete { server: String },
+    Delete {
+        server: String,
+    },
 
     #[display("Kill active process")]
     Kill,

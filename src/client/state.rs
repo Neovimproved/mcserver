@@ -22,6 +22,12 @@ pub struct TempMessage<T = String> {
     duration: Duration,
 }
 
+impl TempMessage<String> {
+    pub fn get_str(&self) -> Option<&str> {
+        self.get().map(String::as_str)
+    }
+}
+
 impl<T> TempMessage<T> {
     pub fn new(duration: Duration) -> Self {
         Self {
@@ -80,6 +86,7 @@ pub struct AdditionState {
     pub version: String,
     pub server_software: String,
     pub field: AddingField,
+    pub error_message: TempMessage,
 }
 
 #[derive(Debug)]
@@ -108,6 +115,7 @@ impl SelectionState {
             version: String::new(),
             server_software: String::new(),
             field: AddingField::Name,
+            error_message: TempMessage::new(Duration::from_secs(2)),
         })
     }
 
@@ -137,8 +145,7 @@ impl ConnectionState {
 #[derive(Debug)]
 pub struct Console {
     pub attached_server: usize,
-    #[allow(dead_code)]
-    pub path: String,
+    pub _path: String,
     pub input: String,
     pub output: LineBuffer,
     pub state: ConnectionState,
@@ -151,10 +158,10 @@ pub enum Mode {
 }
 
 impl Mode {
-    pub fn output(index: usize, path: String) -> Self {
+    pub fn output(index: usize, _path: String) -> Self {
         Self::Console(Console {
             attached_server: index,
-            path,
+            _path,
             input: String::new(),
             output: LineBuffer::new(),
             state: ConnectionState::Normal,

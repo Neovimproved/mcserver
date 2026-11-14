@@ -10,6 +10,7 @@ use tokio::{
 use crate::{
     config::Config,
     consts::MAX_MESSAGE_LENGTH,
+    creator, error,
     line_buffer::LineBuffer,
     messages::{ClientMessage, ServerInstruction, ServerMessage},
     read_message,
@@ -70,10 +71,6 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             .wrap_err("Failed to delete server")
     }
 
-    async fn create_server(&self, _path: String) -> Result<()> {
-        todo!()
-    }
-
     async fn send_synchronization_payload(&mut self) -> Result<()> {
         let message = ServerMessage::SynchronizationPayload {
             online_servers: self
@@ -94,17 +91,22 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             let reader = &mut self.reader;
             let message: ClientMessage = match read_message!(reader).await {
                 Ok(message) => message,
-                Err(crate::error::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(error::Error::Io(err)) if err.kind() == io::ErrorKind::UnexpectedEof => {
                     println!("Most graceful client disconnect");
                     break Ok(ServeAction::Disconnect);
                 }
-                Err(err) => return Err(err).wrap_err("Erroneous client disconnect"),
+                Err(err) => {
+                    return Err(err).wrap_err("Erroneous client disconnect");
+                }
             };
 
             match message {
                 ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
-                ClientMessage::Create { path, .. } => self.create_server(path).await?,
+                ClientMessage::Create(create_message) => {
+                    println!("Creating!");
+                    creator::create(create_message).await?
+                }
 
                 ClientMessage::Delete { server } => self.delete_server(server).await?,
 
@@ -140,10 +142,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
         match message {
             ClientMessage::Attach { server } => action = Some(ServeAction::Attach(server)),
-            ClientMessage::Create {
-                path,
-                server_software: _,
-            } => self.create_server(path).await?,
+            ClientMessage::Create(create_message) => creator::create(create_message).await?,
             ClientMessage::Delete { server } => self.delete_server(server).await?,
             ClientMessage::Detach => action = Some(ServeAction::Prompt),
             ClientMessage::Kill => message_sender

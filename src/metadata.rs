@@ -44,8 +44,10 @@ pub struct Metadata {
     pub last_used: LastUsed,
 }
 
-pub fn dir(server_dir: impl AsRef<Path>) -> PathBuf {
-    server_dir.as_ref().join(METADATA_DIRECTORY)
+pub fn dir(server_dir: impl Into<PathBuf>) -> PathBuf {
+    let mut server_dir = server_dir.into();
+    server_dir.push(METADATA_DIRECTORY);
+    server_dir
 }
 
 pub async fn get_jar_file(server_dir: impl Into<PathBuf>) -> MetadataResult<PathBuf> {

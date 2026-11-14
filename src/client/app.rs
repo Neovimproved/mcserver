@@ -5,6 +5,7 @@ use std::{
     mem,
     path::PathBuf,
     pin::Pin,
+    str::FromStr,
 };
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
@@ -32,9 +33,10 @@ use crate::{
     },
     config::{self, Config, TerminalInterfaceConfig},
     consts::CURSOR_CHAR,
+    creator::{ServerSoftware, Version},
     line_buffer::LineBuffer,
     log,
-    messages::{ClientMessage, ServerMessage, display_bytes},
+    messages::{ClientMessage, CreateMessage, ServerMessage, display_bytes},
     read_message,
     servers::{self, ServerEntry},
     write_message,
@@ -226,6 +228,7 @@ impl App {
         mut writer: impl AsyncWriteExt + Unpin,
     ) -> miette::Result<()> {
         match key.code {
+            // TODO: implement an enter key with a control modifier to fold/unfold all
             KeyCode::Enter => self
                 .try_select(writer)
                 .await
@@ -336,8 +339,49 @@ impl App {
                     // TODO: actually create the server here
                     KeyCode::Enter => {
                         if addition_state.field.next() {
+                            let server_software = if addition_state.server_software.is_empty() {
+                                // vanilla
+                                ServerSoftware::default()
+                            } else {
+                                let Ok(server_software) =
+                                    ServerSoftware::from_str(&addition_state.server_software)
+                                else {
+                                    addition_state.error_message.insert(format!(
+                                        "`{}` is not a valid server software",
+                                        addition_state.server_software
+                                    ));
+                                    return Ok(());
+                                };
+
+                                server_software
+                            };
+
+                            let version = if addition_state.version.is_empty() {
+                                log!("Empty!");
+                                None
+                            } else {
+                                log!("Parsing `{}`", addition_state.version);
+                                match Version::from_str(&addition_state.version) {
+                                    Ok(version) => Some(version),
+                                    Err(err) => {
+                                        addition_state.error_message.insert(err.to_string());
+                                        return Ok(());
+                                    }
+                                }
+                            };
+
+                            let message = CreateMessage {
+                                path: mem::take(&mut addition_state.name),
+                                server_software,
+                                version,
+                            };
+
+                            write_message!(writer, ClientMessage::Create(message))
+                                .await
+                                .into_diagnostic()
+                                .wrap_err("Failed to send create server request")?;
+
                             selection_state.reset();
-                            todo!();
                         }
                     }
                     KeyCode::Tab => {

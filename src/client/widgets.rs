@@ -1,15 +1,17 @@
+use std::borrow::Cow;
+
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Stylize},
     text::{Line, Span, ToSpan},
-    widgets::{Block, List, Paragraph, Widget, Wrap},
+    widgets::{Block, List, Paragraph, Widget},
 };
 
 use crate::{
     client::state::{AddingField, AdditionState, DeletionState},
     config::TerminalInterfaceConfig,
-    log,
+    consts::{DEFAULT_NAME_INPUT, DEFAULT_SOFTWARE_INPUT, DEFAULT_VERSION_INPUT},
     servers::ServerEntry,
 };
 
@@ -153,46 +155,17 @@ impl Widget for ServersList<'_> {
     }
 }
 
-fn slice_to_fit(s: &str, width: u16) -> &str {
-    &s[(s.len() + 1).saturating_sub(width as usize)..]
+trait LazyDefault<'a> {
+    fn blinking(&'a self) -> Line<'a>;
+
+    fn non_blinking(&'a self) -> Line<'a>;
 }
 
-fn blinking_default(default: &str) -> Line<'_> {
-    let (next_char_idx, first_char) = default
-        .char_indices()
-        .next()
-        .map(|(idx, ch)| (idx + 1, ch))
-        .unwrap_or((0, ' '));
+impl<'a> LazyDefault<'a> for &'a str {
+    fn blinking(&'a self) -> Line<'a> {
+        let default = self;
 
-    Line::from_iter([
-        first_char.on_white().black(),
-        default[next_char_idx..].gray(),
-    ])
-}
-
-fn blinking_input(input: &str) -> Line<'_> {
-    Line::from_iter([Span::from(input), ' '.on_white()])
-}
-
-fn blinking_input_or<'a>(input: &'a str, default: &'a str, width: u16) -> Line<'a> {
-    if input.is_empty() {
-        blinking_default(slice_to_fit(default, width))
-    } else {
-        blinking_input(slice_to_fit(input, width))
-    }
-}
-
-fn blinking_text_or_else<'a>(
-    input: &'a str,
-    default: impl FnOnce() -> String,
-    width: u16,
-) -> Line<'a> {
-    log!("Blinking text or else");
-    if input.is_empty() {
-        let string = default();
-        let visible_string = slice_to_fit(&string, width);
-
-        let (next_char_idx, first_char) = visible_string
+        let (next_char_idx, first_char) = default
             .char_indices()
             .next()
             .map(|(idx, ch)| (idx + 1, ch))
@@ -200,34 +173,137 @@ fn blinking_text_or_else<'a>(
 
         Line::from_iter([
             first_char.on_white().black(),
-            visible_string[next_char_idx..].to_string().gray(),
+            default[next_char_idx..].gray(),
         ])
-    } else {
-        blinking_input(slice_to_fit(input, width))
+    }
+
+    fn non_blinking(&'a self) -> Line<'a> {
+        Line::from(self.gray())
     }
 }
 
-fn non_blinking_text_or<'a>(input: &'a str, default: &'a str, width: u16) -> Line<'a> {
-    if input.is_empty() {
-        slice_to_fit(default, width).gray().into()
-    } else {
-        Line::from(slice_to_fit(input, width))
+impl<'a, T: Into<Cow<'a, str>>, F: Fn() -> T> LazyDefault<'a> for F {
+    fn blinking(&self) -> Line<'a> {
+        let default = self().into();
+
+        let (next_char_idx, first_char) = default
+            .char_indices()
+            .next()
+            .map(|(idx, ch)| (idx + 1, ch))
+            .unwrap_or((0, ' '));
+
+        Line::from_iter([
+            first_char.on_white().black(),
+            default[next_char_idx..].to_string().gray(),
+        ])
+    }
+
+    fn non_blinking(&'a self) -> Line<'a> {
+        Line::from(self().into().on_white().black())
     }
 }
 
-fn non_blinking_text_or_else<'a>(
+struct Input<'a, D: LazyDefault<'a>> {
+    title: Cow<'a, str>,
+    default: D,
     input: &'a str,
-    default: impl FnOnce() -> String,
-    width: u16,
-) -> Line<'a> {
-    if input.is_empty() {
-        let string = default();
-        let visible_string = slice_to_fit(&string, width);
-        visible_string.to_string().gray().into()
-    } else {
-        Line::from(slice_to_fit(input, width))
+    blinking: bool,
+    background_color: Option<Color>,
+    error: Option<&'a str>,
+}
+
+impl<'a, D: LazyDefault<'a>> Input<'a, D> {
+    pub fn new(title: impl Into<Cow<'a, str>>, input: &'a str, default: D) -> Self {
+        Self {
+            title: title.into(),
+            default,
+            input,
+            blinking: false,
+            background_color: None,
+            error: None,
+        }
+    }
+
+    pub fn error(mut self, value: Option<&'a str>) -> Self {
+        self.error = value;
+        self
+    }
+
+    pub fn blinking(mut self, blinking: bool) -> Self {
+        self.blinking = blinking;
+        self
+    }
+
+    pub fn bg(mut self, color: Color) -> Self {
+        self.background_color = Some(color);
+        self
+    }
+
+    fn slice_to_fit(s: impl Into<Cow<'a, str>>, width: u16) -> Cow<'a, str> {
+        let s = s.into();
+        let start = (s.len() + 1).saturating_sub(width as usize);
+
+        if start == 0 {
+            s
+        } else {
+            match s {
+                Cow::Borrowed(s) => Cow::Borrowed(&s[start..]),
+                Cow::Owned(s) => Cow::Owned(s[start..].to_string()),
+            }
+        }
+    }
+
+    fn non_blinking_line(&'a self, width: u16) -> Line<'a> {
+        if self.input.is_empty() {
+            self.default.non_blinking()
+        } else {
+            Line::from(Self::slice_to_fit(self.input, width))
+        }
+    }
+
+    fn blinking_line(&'a self, width: u16) -> Line<'a> {
+        if self.input.is_empty() {
+            self.default.blinking()
+        } else {
+            Line::from_iter([
+                Self::slice_to_fit(self.input, width).white(),
+                ' '.on_white(),
+            ])
+        }
     }
 }
+
+impl<'a, D: LazyDefault<'a>> Widget for &'a Input<'a, D> {
+    fn render(self, area: Rect, buf: &mut Buffer)
+    where
+        Self: Sized,
+    {
+        let text_width = area.width.saturating_sub(2);
+
+        let line = if self.blinking {
+            self.blinking_line(text_width)
+        } else {
+            self.non_blinking_line(text_width)
+        };
+
+        let mut block = Block::bordered()
+            .border_style(Color::Reset)
+            .title(self.title.as_ref());
+
+        if let Some(error) = self.error {
+            block = block.title(Line::from(error).red().right_aligned())
+        }
+
+        let mut para = Paragraph::new(line).block(block).style(Color::Reset);
+
+        if let Some(color) = self.background_color {
+            para = para.bg(color);
+        }
+
+        para.render(area, buf);
+    }
+}
+
 pub struct Addition<'a> {
     addition_state: &'a AdditionState,
     blinking: bool,
@@ -252,73 +328,29 @@ impl<'a> Widget for Addition<'a> {
     where
         Self: Sized,
     {
-        const DEFAULT_NAME: &str = "Unnamed";
-        const DEFAULT_VERSION: &str = "Latest";
-        const DEFAULT_SOFTWARE: &str = "Vanilla";
-
         let Self {
             addition_state,
             blinking,
         } = self;
 
-        let text_width = area.width.saturating_sub(2);
+        let name_input = Input::new("Name", &addition_state.name, DEFAULT_NAME_INPUT)
+            .blinking(blinking && matches!(addition_state.field, AddingField::Name));
 
-        let [addition_text, version_text, server_software_text] = if blinking {
-            let name_text = if let AddingField::Name = self.addition_state.field {
-                blinking_input_or(&self.addition_state.name, DEFAULT_NAME, text_width)
-            } else {
-                non_blinking_text_or(&self.addition_state.name, DEFAULT_NAME, text_width)
-            };
+        let version_input = Input::new("Version", &addition_state.version, DEFAULT_VERSION_INPUT)
+            .blinking(blinking && matches!(addition_state.field, AddingField::Version));
 
-            let version_text = if let AddingField::Version = addition_state.field {
-                blinking_input_or(&addition_state.version, DEFAULT_VERSION, text_width)
-            } else {
-                non_blinking_text_or(&addition_state.version, DEFAULT_VERSION, text_width)
-            };
-
-            let software_text = if let AddingField::Software = addition_state.field {
-                blinking_input_or(
-                    &addition_state.server_software,
-                    DEFAULT_SOFTWARE,
-                    text_width,
-                )
-            } else {
-                non_blinking_text_or(
-                    &addition_state.server_software,
-                    DEFAULT_SOFTWARE,
-                    text_width,
-                )
-            };
-
-            [name_text, version_text, software_text]
-        } else {
-            [
-                non_blinking_text_or(&addition_state.name, DEFAULT_NAME, text_width),
-                non_blinking_text_or(&addition_state.version, DEFAULT_VERSION, text_width),
-                non_blinking_text_or(
-                    &addition_state.server_software,
-                    DEFAULT_SOFTWARE,
-                    text_width,
-                ),
-            ]
-        }
-        .map(Paragraph::new);
-
-        let name_paragraph =
-            addition_text.block(Block::bordered().border_style(Color::Reset).title("Name"));
-        let version_paragraph = version_text.block(
-            Block::bordered()
-                .border_style(Color::Reset)
-                .title("Version"),
-        );
-        let software_paragraph = server_software_text
-            .block(Block::bordered().border_style(Color::Reset).title("Server"));
+        let software_input = Input::new(
+            "Server",
+            &addition_state.server_software,
+            DEFAULT_SOFTWARE_INPUT,
+        )
+        .blinking(blinking && matches!(addition_state.field, AddingField::Software));
 
         let x = area.x;
         let width = area.width;
         let height = area.height / 3;
 
-        name_paragraph.render(
+        name_input.render(
             Rect {
                 x,
                 y: area.y,
@@ -330,7 +362,7 @@ impl<'a> Widget for Addition<'a> {
 
         let version_y = area.y + height;
 
-        version_paragraph.render(
+        version_input.render(
             Rect {
                 x,
                 y: version_y,
@@ -340,7 +372,7 @@ impl<'a> Widget for Addition<'a> {
             buf,
         );
 
-        software_paragraph.render(
+        software_input.render(
             Rect {
                 x,
                 y: version_y + height,
@@ -383,29 +415,17 @@ impl Widget for Deletion<'_> {
             terminal_interface_config,
         } = self;
 
-        let default = || format!("Type {} here to confirm", deleting_state.name);
+        let input = Input::new(
+            format!("Deleting {}", deleting_state.entry_type),
+            &deleting_state.confirmation,
+            || format!("Type {} here to confirm", deleting_state.name),
+        )
+        .error(deleting_state.error_message.get_str())
+        .blinking(blinking)
+        .bg(terminal_interface_config
+            .background_color
+            .unwrap_or(Color::Reset));
 
-        let text_width = area.width.saturating_sub(2);
-
-        let deletion_line = if blinking {
-            blinking_text_or_else(&deleting_state.confirmation, default, text_width)
-        } else {
-            non_blinking_text_or_else(&deleting_state.confirmation, default, text_width)
-        };
-
-        let mut block = Block::bordered().title(format!("Deleting {}", deleting_state.entry_type));
-
-        if let Some(message) = deleting_state.error_message.get() {
-            block = block.title(Line::from(message.as_str()).red().right_aligned());
-        }
-
-        let paragraph = Paragraph::new(deletion_line)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .bg(terminal_interface_config
-                .background_color
-                .unwrap_or(Color::Reset));
-
-        paragraph.render(area, buf);
+        input.render(area, buf);
     }
 }

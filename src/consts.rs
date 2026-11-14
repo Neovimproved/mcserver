@@ -31,3 +31,8 @@ pub const LAST_USED_FILE_NAME: &str = "last_used.bin";
 
 //
 pub const CURSOR_CHAR: char = '█';
+
+// Immutable UI
+pub const DEFAULT_NAME_INPUT: &str = "Unnamed";
+pub const DEFAULT_VERSION_INPUT: &str = "Latest";
+pub const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
