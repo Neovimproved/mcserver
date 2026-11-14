@@ -298,7 +298,6 @@ pub async fn main() -> Result<()> {
 
     let server_communicators: &'static DashMap<_, _> = Box::leak(Box::new(DashMap::new()));
 
-    let mut buf = String::new();
     let mut stdin_finished = false;
     let mut stdin_reader = BufReader::new(io::stdin());
 
@@ -307,6 +306,8 @@ pub async fn main() -> Result<()> {
         .wrap_err("Failed to create config watch")?;
 
     loop {
+        let mut buf = String::new();
+
         select! {
             res = tcp_listener.accept() => {
                 tokio::spawn(async move {
