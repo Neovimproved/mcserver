@@ -26,7 +26,7 @@ mod widgets;
 
 use app::App;
 
-use crate::consts::{CONNECTION_PORT, SOCKET_FILE_NAME, SOCKET_PATH, TEMP_DIR};
+use crate::communication::{CONNECTION_PORT, SOCKET_FILE_NAME, SOCKET_PATH, TEMP_DIR};
 
 pub struct GuardedTerminal {
     terminal: DefaultTerminal,

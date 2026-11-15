@@ -10,15 +10,15 @@ use tokio::runtime::Runtime;
 use crate::{
     cli::{Cli, Command, DAEMONIZE_OPTION_NAME, NO_DAEMONIZE_OPTION_NAME},
     client::StartState,
-    consts::{PID_FILE_PATH, TEMP_DIR},
+    communication::{PID_FILE_PATH, TEMP_DIR},
     server::runtime,
     servers::ServerGroup,
 };
 
 mod cli;
 mod client;
+mod communication;
 mod config;
-mod consts;
 mod creator;
 mod error;
 mod line_buffer;

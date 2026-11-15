@@ -19,8 +19,8 @@ use tokio::{
 };
 
 use crate::{
+    communication::{LOCAL_TCP_ADDR, SOCKET_PATH},
     config::{self, Config},
-    consts::{LOCAL_TCP_ADDR, SOCKET_PATH},
     line_buffer::LineBuffer,
     messages::{ServerInstruction, ServerMessage},
     metadata,
