@@ -8,10 +8,11 @@ use std::{
 use derive_more::{Display, Error, From};
 use tokio::{fs, io};
 
-use crate::{
-    consts::{JAR_FILE_NAME, LAST_USED_FILE_NAME, METADATA_DIRECTORY},
-    error::display_path,
-};
+use crate::error::display_path;
+
+pub const DIRECTORY: &str = ".mcserver";
+pub const JAR_FILE_NAME: &str = "jar_file.txt";
+pub const LAST_USED_FILE_NAME: &str = "last_used.bin";
 
 #[derive(Debug, Display, Error, From)]
 pub enum MetadataError {
@@ -46,8 +47,28 @@ pub struct Metadata {
 
 pub fn dir(server_dir: impl Into<PathBuf>) -> PathBuf {
     let mut server_dir = server_dir.into();
-    server_dir.push(METADATA_DIRECTORY);
+    server_dir.push(DIRECTORY);
     server_dir
+}
+
+pub async fn set_jar_file_with_metadata_dir(
+    metadata_dir: impl Into<PathBuf>,
+    jar_file_name: &str,
+) -> MetadataResult<PathBuf> {
+    let mut metadata_dir = metadata_dir.into();
+    metadata_dir.push(JAR_FILE_NAME);
+    let file_path = metadata_dir;
+
+    fs::write(&file_path, jar_file_name).await?;
+
+    Ok(file_path)
+}
+
+pub async fn set_jar_file(
+    server_dir: impl Into<PathBuf>,
+    jar_file_name: &str,
+) -> MetadataResult<PathBuf> {
+    set_jar_file_with_metadata_dir(dir(server_dir), jar_file_name).await
 }
 
 pub async fn get_jar_file(server_dir: impl Into<PathBuf>) -> MetadataResult<PathBuf> {
@@ -134,7 +155,7 @@ pub async fn get(server_dir: &Path) -> MetadataResult<Metadata> {
         return Err(dir.into());
     }
 
-    let jar_file = get_jar_file(server_dir.to_path_buf()).await?;
+    let jar_file = get_jar_file(server_dir).await?;
     let last_used = get_last_used(&dir).await?;
 
     Ok(Metadata {

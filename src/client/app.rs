@@ -32,7 +32,6 @@ use crate::{
         widgets::{Addition, Deletion, ServersList},
     },
     config::{self, Config, TerminalInterfaceConfig},
-    consts::CURSOR_CHAR,
     creator::{ServerSoftware, Version},
     line_buffer::LineBuffer,
     log,
@@ -41,6 +40,9 @@ use crate::{
     servers::{self, ServerEntry},
     write_message,
 };
+
+const CONSOLE_CURSOR_CHAR: char = '█';
+const POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT: u16 = 90;
 
 pub struct App {
     config: Config,
@@ -809,7 +811,7 @@ impl App {
         input.chars().for_each(|ch| output_lines.push(ch));
 
         if self.blinking {
-            output_lines.push(CURSOR_CHAR);
+            output_lines.push(CONSOLE_CURSOR_CHAR);
         }
 
         let vscroll = output_lines.len().saturating_sub(output_lines_available);
@@ -852,7 +854,10 @@ impl App {
                             Constraint::Length(frame_area.height.saturating_sub(9) / 2),
                             Constraint::Length(9),
                         ])
-                        .split(Self::center_horizontal(frame.area(), 90))[1];
+                        .split(Self::center_horizontal(
+                            frame.area(),
+                            POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
+                        ))[1];
 
                         frame.render_widget(
                             Addition::new(addition_state).blinking(self.blinking),
@@ -860,15 +865,13 @@ impl App {
                         );
                     }
                     SelectionState::Deleting(deletion_state) => {
-                        const DELETION_WIDGET_WIDTH_PERCENT: u16 = 90;
-
                         let area = Layout::vertical([
                             Constraint::Length((frame_area.height.saturating_sub(3)) / 2),
                             Constraint::Length(3),
                         ])
                         .split(Self::center_horizontal(
                             frame_area,
-                            DELETION_WIDGET_WIDTH_PERCENT,
+                            POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
                         ))[1];
 
                         let deletion_widget =

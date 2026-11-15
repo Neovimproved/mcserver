@@ -33,6 +33,10 @@ pub enum Error {
 
     Bitcode(bitcode::Error),
 
+    #[display("Path was escaped: `{}`", display_path(_0))]
+    #[from(ignore)]
+    EscapedPath(#[error(not(source))] PathBuf),
+
     #[display("File name of path `{}` could not be found", display_path(_0))]
     #[from(ignore)]
     FileNameNotFound(#[error(not(source))] PathBuf),

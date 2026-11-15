@@ -4,6 +4,7 @@ use std::{
     ffi::OsStr,
     fmt::Debug,
     path::{Path, PathBuf},
+    result,
     str::FromStr,
     time::Duration,
 };
@@ -13,10 +14,11 @@ use kdl::KdlDocument;
 use ratatui::style::Color;
 use tokio::{fs, io};
 
-use crate::{
-    consts::{CONFIG_FILE_VARIABLE, DEFAULT_CONFIG_DIRECTORY, DEFAULT_CONFIG_FILE_NAME},
-    error::{Error, Result},
-};
+use crate::error::{Error, Result};
+
+const DEFAULT_CONFIG_DIRECTORY: &str = "mcserver";
+const DEFAULT_CONFIG_FILE_NAME: &str = "config.kdl";
+const CONFIG_FILE_VARIABLE: &str = "MCSERVER_CONFIG_FILE";
 
 mod parser;
 mod watcher;
@@ -32,26 +34,28 @@ pub struct ServersDirectory {
     pub path: PathBuf,
 }
 
+impl ServersDirectory {
+    fn path_part(s: &str) -> Result<PathBuf> {
+        let expanded = shellexpand::full(s)?.to_string();
+
+        if Path::new(&expanded).is_relative() {
+            let mut path = home_dir().ok_or(Error::HomeDirectoryNotFound)?;
+            path.push(expanded);
+
+            Ok(path)
+        } else {
+            Ok(expanded.into())
+        }
+    }
+}
+
 impl TryFrom<String> for ServersDirectory {
     type Error = Error;
 
     fn try_from(value: String) -> Result<Self> {
-        let expanded = shellexpand::full(&value)?.to_string();
+        let path = Self::path_part(&value)?;
 
-        Ok(if Path::new(&expanded).is_relative() {
-            let mut path = home_dir().ok_or(Error::HomeDirectoryNotFound)?;
-            path.push(expanded);
-
-            Self {
-                value: path.clone().into_string().map_err(Error::NonUtf8Path)?,
-                path,
-            }
-        } else {
-            Self {
-                value,
-                path: expanded.into(),
-            }
-        })
+        Ok(Self { value, path })
     }
 }
 
@@ -59,7 +63,42 @@ impl FromStr for ServersDirectory {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        Self::try_from(s.to_owned())
+        let path = Self::path_part(s)?;
+        let value = s.to_string();
+
+        Ok(Self { value, path })
+    }
+}
+
+impl TryFrom<&str> for ServersDirectory {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self> {
+        Self::from_str(value)
+    }
+}
+
+impl TryFrom<PathBuf> for ServersDirectory {
+    type Error = Error;
+
+    fn try_from(path: PathBuf) -> result::Result<Self, Self::Error> {
+        let Some(s) = path.to_str() else {
+            return Err(Error::NonUtf8Path(path));
+        };
+        let value = s.to_string();
+
+        Ok(Self { value, path })
+    }
+}
+
+impl TryFrom<&Path> for ServersDirectory {
+    type Error = Error;
+
+    fn try_from(path: &Path) -> Result<Self> {
+        // You might think, at first, that there may be a redundant heap allocation for the path buffer
+        // However, on further inspection, we can observe that both the happy path and erroneous
+        // path necessarily require a path buffer
+        Self::try_from(path.to_path_buf())
     }
 }
 
@@ -245,8 +284,9 @@ pub async fn read() -> Result<(Config, KdlDocument, PathBuf)> {
 mod test {
     use miette::{Context, IntoDiagnostic};
 
+    use crate::test_utils::tempdir_init_miette;
+
     use super::*;
-    use crate::test_utils::tempdir_init;
 
     enum Last {
         Backslash,
@@ -315,7 +355,7 @@ mod test {
 
     #[tokio::test]
     async fn test_read_file() -> miette::Result<()> {
-        let dir = tempdir_init()?;
+        let dir = tempdir_init_miette()?;
 
         let config_path = dir.path().join(DEFAULT_CONFIG_FILE_NAME);
 

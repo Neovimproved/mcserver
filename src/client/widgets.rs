@@ -11,7 +11,6 @@ use ratatui::{
 use crate::{
     client::state::{AddingField, AdditionState, DeletionState},
     config::TerminalInterfaceConfig,
-    consts::{DEFAULT_NAME_INPUT, DEFAULT_SOFTWARE_INPUT, DEFAULT_VERSION_INPUT},
     servers::ServerEntry,
 };
 
@@ -22,6 +21,11 @@ pub struct ServersList<'a> {
     scroll: usize,
     terminal_interface_config: &'a TerminalInterfaceConfig,
 }
+
+const DEFAULT_NAME_INPUT: &str = "Unnamed";
+
+const DEFAULT_VERSION_INPUT: &str = "Latest";
+const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
 
 impl<'a> ServersList<'a> {
     pub fn new(
@@ -203,7 +207,7 @@ impl<'a, T: Into<Cow<'a, str>>, F: Fn() -> T> LazyDefault<'a> for F {
     }
 }
 
-struct Input<'a, D: LazyDefault<'a>> {
+struct Input<'a, D> {
     title: Cow<'a, str>,
     default: D,
     input: &'a str,

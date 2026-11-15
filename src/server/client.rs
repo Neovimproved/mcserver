@@ -9,10 +9,9 @@ use tokio::{
 
 use crate::{
     config::Config,
-    consts::MAX_MESSAGE_LENGTH,
     creator, error,
     line_buffer::LineBuffer,
-    messages::{ClientMessage, ServerInstruction, ServerMessage},
+    messages::{ClientMessage, MAX_MESSAGE_LENGTH, ServerInstruction, ServerMessage},
     read_message,
     server::{
         runtime::initialize_server,
@@ -27,7 +26,7 @@ enum ServeAction {
     Disconnect,
 }
 
-pub struct Client<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> {
+pub struct Client<R, W> {
     reader: R,
     writer: W,
     config: &'static RwLock<Config>,
@@ -104,8 +103,9 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
                 ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
                 ClientMessage::Create(create_message) => {
-                    println!("Creating!");
-                    creator::create(create_message).await?
+                    creator::Builder::new()
+                        .build(self.config, create_message)
+                        .await?;
                 }
 
                 ClientMessage::Delete { server } => self.delete_server(server).await?,
@@ -142,7 +142,11 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
         match message {
             ClientMessage::Attach { server } => action = Some(ServeAction::Attach(server)),
-            ClientMessage::Create(create_message) => creator::create(create_message).await?,
+            ClientMessage::Create(create_message) => {
+                creator::Builder::new()
+                    .build(self.config, create_message)
+                    .await?;
+            }
             ClientMessage::Delete { server } => self.delete_server(server).await?,
             ClientMessage::Detach => action = Some(ServeAction::Prompt),
             ClientMessage::Kill => message_sender

@@ -14,8 +14,8 @@ use tokio::fs::{self, DirEntry, ReadDir};
 
 use crate::{
     config::TerminalInterfaceConfig,
-    consts::METADATA_DIRECTORY,
     error::{Error, display_path},
+    metadata,
 };
 
 #[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -344,7 +344,7 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
             .map_err(Error::NonUtf8Path)
             .into_diagnostic()?;
 
-            if fs::try_exists(entry_path.join(METADATA_DIRECTORY))
+            if fs::try_exists(entry_path.join(metadata::DIRECTORY))
                 .await
                 .into_diagnostic()
                 .wrap_err("Failed to check if directory exists")?
@@ -377,7 +377,7 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
 mod test {
     use std::path::PathBuf;
 
-    use crate::test_utils::{new_dir, tempdir_init};
+    use crate::test_utils::{new_dir, tempdir_init_miette};
 
     use super::*;
 
@@ -386,14 +386,14 @@ mod test {
         name: impl AsRef<Path>,
     ) -> miette::Result<(PathBuf, PathBuf)> {
         let server_dir = new_dir(parent, name).await?;
-        let metadata_dir = new_dir(&server_dir, METADATA_DIRECTORY).await?;
+        let metadata_dir = new_dir(&server_dir, metadata::DIRECTORY).await?;
 
         Ok((server_dir, metadata_dir))
     }
 
     #[tokio::test]
     async fn entries() -> miette::Result<()> {
-        let temp_dir = tempdir_init()?;
+        let temp_dir = tempdir_init_miette()?;
         let servers_directory = temp_dir.path();
 
         for i in 0..2 {

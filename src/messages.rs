@@ -8,6 +8,8 @@ use crate::{
     line_buffer::LineBuffer,
 };
 
+pub const MAX_MESSAGE_LENGTH: usize = 1024 * 1024;
+
 fn terminal_like_bytes(bytes: &str, normal_end: usize) -> String {
     let mut acc = String::from(&bytes[..normal_end]);
 
