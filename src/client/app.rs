@@ -836,8 +836,6 @@ impl App {
 
         let frame_area = frame.area();
 
-        const DELETION_WIDGET_LINES: u16 = 3;
-
         match &self.mode {
             Mode::Selecting(selection_state) => {
                 frame.render_widget(
@@ -851,7 +849,7 @@ impl App {
                     SelectionState::Normal => {}
                     SelectionState::Adding(addition_state) => {
                         let addition_area = Layout::vertical([
-                            Constraint::Length((frame_area.height - 9) / 2),
+                            Constraint::Length(frame_area.height.saturating_sub(9) / 2),
                             Constraint::Length(9),
                         ])
                         .split(Self::center_horizontal(frame.area(), 90))[1];
@@ -865,8 +863,8 @@ impl App {
                         const DELETION_WIDGET_WIDTH_PERCENT: u16 = 90;
 
                         let area = Layout::vertical([
-                            Constraint::Length((frame_area.height - DELETION_WIDGET_LINES) / 2),
-                            Constraint::Length(DELETION_WIDGET_LINES),
+                            Constraint::Length((frame_area.height.saturating_sub(3)) / 2),
+                            Constraint::Length(3),
                         ])
                         .split(Self::center_horizontal(
                             frame_area,
