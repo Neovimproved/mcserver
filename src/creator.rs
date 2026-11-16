@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::{
     fmt::{self, Display},
     num::ParseIntError,
@@ -7,7 +6,7 @@ use std::{
 };
 
 use bitcode::{Decode, Encode};
-use color_eyre::eyre::{Context, ContextCompat, Result};
+use color_eyre::eyre::{Context, ContextCompat, Result, bail};
 use derive_more::{Display, Error, From};
 use reqwest::{
     IntoUrl,
@@ -120,7 +119,7 @@ static BASE_PAPER_URL: &str = "https://fill.papermc.io/v3/projects/paper";
 
 static BASE_FABRIC_URL: &str = "https://meta.fabricmc.net/v2/versions";
 
-static BASE_VANILLA_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
+static _BASE_VANILLA_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 trait Software<T> {
     const NAME: &str;
@@ -175,31 +174,66 @@ impl<T: Software<U> + DownloadableJarSoftware, U: IntoUrl> CreateSoftware<U> for
     }
 }
 
-#[derive(Debug, From)]
-struct FabricSoftware<B = &'static str> {
-    base_url: B,
+#[derive(Debug, Deserialize)]
+struct FabricEntry {
+    version: String,
+    stable: bool,
 }
 
 #[derive(Debug, Deserialize)]
 struct FabricVersions {
-    version: String,
-    stable: bool,
+    game: Vec<FabricEntry>,
+    loader: Vec<FabricEntry>,
+    installer: Vec<FabricEntry>,
+}
+
+#[derive(Debug, From)]
+struct FabricSoftware<B> {
+    base_url: B,
 }
 
 impl<B: Display> Software<String> for FabricSoftware<B> {
     const NAME: &str = "fabric";
 
     async fn get(&self, version: Option<Version>) -> Result<String> {
-        let versions = reqwest::get(self.base_url.to_string()).await?;
+        let response = reqwest::get(self.base_url.to_string())
+            .await
+            .wrap_err("Get request failed")?;
 
-        Ok("".into())
+        let versions: FabricVersions = response
+            .json()
+            .await
+            .wrap_err("Failed to convert response to json")?;
+
+        let game_version = match version {
+            Some(version) => version.to_string(),
+            None => match versions.game.into_iter().find(|e| e.stable) {
+                Some(game) => game.version,
+                None => bail!("No stable version was found"),
+            },
+        };
+
+        let loader_version = match versions.loader.into_iter().find(|e| e.stable) {
+            Some(loader) => loader.version,
+            None => bail!("No stable loader was found"),
+        };
+
+        let installer_version = match versions.installer.into_iter().find(|e| e.stable) {
+            Some(installer) => installer.version,
+            None => bail!("No stable installer was found"),
+        };
+
+        Ok(dbg!(format!(
+            "{}/loader/{}/{}/{}/server/jar",
+            self.base_url, game_version, loader_version, installer_version
+        )))
     }
 }
 
 impl<B> DownloadableJarSoftware for FabricSoftware<B> {}
 
 #[derive(Debug, From)]
-struct PaperSoftware<B = &'static str> {
+struct PaperSoftware<B> {
     base_url: B,
 }
 
@@ -211,11 +245,9 @@ impl<B: Display> Software<String> for PaperSoftware<B> {
             Some(version) => {
                 let version_url = format!("{}/versions/{version}", self.base_url);
 
-                let response = reqwest::get(&version_url).await.wrap_err_with(|| {
-                    format!(
-                        "Failed to get information for version {version} using url {version_url}"
-                    )
-                })?;
+                let response = reqwest::get(&version_url)
+                    .await
+                    .wrap_err("Version get request failed")?;
 
                 response
                     .json()
@@ -227,7 +259,7 @@ impl<B: Display> Software<String> for PaperSoftware<B> {
 
                 let response = reqwest::get(&versions_url)
                     .await
-                    .wrap_err_with(|| format!("Failed to get versions from {versions_url}"))?;
+                    .wrap_err("Versions get request failed")?;
 
                 let versions: PaperVersions = response
                     .json()
@@ -316,20 +348,22 @@ impl SoftwareResolver for DefaultSoftwareResolver {
         version: Option<Version>,
         server_dir: &Path,
     ) -> Result<String> {
-        let jar_file_name = match server_software {
+        match server_software {
             ServerSoftware::Fabric => {
                 FabricSoftware::from(BASE_FABRIC_URL)
                     .create_jar(version, server_dir)
-                    .await?
+                    .await
             }
             ServerSoftware::Forge => todo!(),
             ServerSoftware::NeoForge => todo!(),
-            ServerSoftware::Paper => todo!(),
+            ServerSoftware::Paper => {
+                PaperSoftware::from(BASE_PAPER_URL)
+                    .create_jar(version, server_dir)
+                    .await
+            }
             ServerSoftware::Purpur => todo!(),
             ServerSoftware::Vanilla => todo!(),
-        };
-
-        Ok(jar_file_name)
+        }
     }
 }
 
@@ -355,25 +389,26 @@ impl Default for Builder<DefaultSoftwareResolver> {
 }
 
 impl<R: SoftwareResolver> Builder<R> {
-    fn with(resolver: R) -> Self {
-        Self { resolver }
-    }
-
     pub async fn build(
         self,
         config: &RwLock<Config>,
         create_message: CreateMessage,
     ) -> Result<(PathBuf, PathBuf)> {
+        if create_message.path.is_empty() {
+            return Err(error::Error::EmptyPath.into());
+        }
+
         let servers_directory = &config.read().await.servers_directory.path;
 
-        let server_dir = servers_directory.join(create_message.path);
+        let path = PathBuf::from(create_message.path);
 
-        for component in server_dir.components().skip(1) {
+        for component in path.components() {
             let Component::Normal(_) = component else {
-                return Err(error::Error::EscapedPath(server_dir))
-                    .wrap_err("Got an escaped path. This is not very good");
+                return Err(error::Error::EscapedPath(path).into());
             };
         }
+
+        let server_dir = servers_directory.join(path);
 
         let metadata_dir = metadata::dir(&server_dir);
 
@@ -418,7 +453,11 @@ mod test {
             server_dir: &Path,
         ) -> Result<String> {
             match server_software {
-                ServerSoftware::Fabric => todo!(),
+                ServerSoftware::Fabric => {
+                    FabricSoftware::from(BASE_FABRIC_URL)
+                        .create_jar(version, server_dir)
+                        .await
+                }
                 ServerSoftware::Forge => todo!(),
                 ServerSoftware::NeoForge => todo!(),
                 ServerSoftware::Paper => {
@@ -432,24 +471,25 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn create_paper_test() -> Result<()> {
+    async fn create_test(server_software: ServerSoftware) -> Result<()> {
         let temp_dir = tempdir_init_eyre()?;
         let servers_directory = temp_dir.path();
         let config = server_configured_directory(servers_directory)?;
 
         let path = "foo/bar".into();
 
-        let (server_dir, _metadata_dir) = Builder::with(MockingResolver)
-            .build(
-                config,
-                CreateMessage {
-                    path,
-                    server_software: ServerSoftware::Paper,
-                    version: None,
-                },
-            )
-            .await?;
+        let (server_dir, _metadata_dir) = Builder {
+            resolver: MockingResolver,
+        }
+        .build(
+            config,
+            CreateMessage {
+                path,
+                server_software,
+                version: None,
+            },
+        )
+        .await?;
 
         assert!(
             fs::try_exists(servers_directory.join(format!("foo/bar/{}", metadata::DIRECTORY)))
@@ -464,5 +504,15 @@ mod test {
         assert!(fs::try_exists(metadata.jar_file).await?);
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_paper_test() -> Result<()> {
+        create_test(ServerSoftware::Paper).await
+    }
+
+    #[tokio::test]
+    async fn create_fabric_test() -> Result<()> {
+        create_test(ServerSoftware::Fabric).await
     }
 }

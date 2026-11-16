@@ -33,6 +33,9 @@ pub enum Error {
 
     Bitcode(bitcode::Error),
 
+    #[display("Received an empty path for a server creation request")]
+    EmptyPath,
+
     #[display("Path was escaped: `{}`", display_path(_0))]
     #[from(ignore)]
     EscapedPath(#[error(not(source))] PathBuf),
