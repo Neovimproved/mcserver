@@ -35,7 +35,7 @@ pub struct ServersDirectory {
 }
 
 impl ServersDirectory {
-    fn path_part(s: &str) -> Result<PathBuf> {
+    fn path_part_from_str(s: &str) -> Result<PathBuf> {
         let expanded = shellexpand::full(s)?.to_string();
 
         if Path::new(&expanded).is_relative() {
@@ -53,7 +53,7 @@ impl TryFrom<String> for ServersDirectory {
     type Error = Error;
 
     fn try_from(value: String) -> Result<Self> {
-        let path = Self::path_part(&value)?;
+        let path = Self::path_part_from_str(&value)?;
 
         Ok(Self { value, path })
     }
@@ -63,7 +63,7 @@ impl FromStr for ServersDirectory {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self> {
-        let path = Self::path_part(s)?;
+        let path = Self::path_part_from_str(s)?;
         let value = s.to_string();
 
         Ok(Self { value, path })
@@ -199,10 +199,10 @@ impl TerminalInterfaceDefaults {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct Config {
     pub default_java_args: Vec<String>,
     pub servers_directory: ServersDirectory,
+    #[allow(dead_code)]
     pub aliases: HashMap<String, String>,
     pub auto_restart: bool,
     pub terminal_interface: TerminalInterfaceConfig,
