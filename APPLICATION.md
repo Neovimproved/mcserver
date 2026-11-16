@@ -4,7 +4,7 @@
 - [ ] Parse the input with an ansi parser
 - [x] Maintain the terminal state / screen buffer
 - [x] Render the parsed input with ratatui
-- [ ] Detect when the process exits and cleanly exit the program
+- [x] Detect when the process exits and cleanly exit the program
 
 
 ## Additional
