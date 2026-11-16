@@ -16,7 +16,7 @@ use crate::{
 // owning/consuming
 // borrowing/referencing
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TempMessage<T = String> {
     message: Option<(SystemTime, T)>,
     duration: Duration,
@@ -81,12 +81,29 @@ impl AddingField {
 }
 
 #[derive(Debug)]
+pub struct AdditionStateErrorMessages {
+    pub name: TempMessage,
+    pub version: TempMessage,
+    pub server_software: TempMessage,
+}
+
+impl AdditionStateErrorMessages {
+    fn new(duration: Duration) -> Self {
+        Self {
+            name: TempMessage::new(duration),
+            version: TempMessage::new(duration),
+            server_software: TempMessage::new(duration),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct AdditionState {
     pub name: String,
     pub version: String,
     pub server_software: String,
     pub field: AddingField,
-    pub error_message: TempMessage,
+    pub error_messages: AdditionStateErrorMessages,
 }
 
 #[derive(Debug)]
@@ -115,7 +132,7 @@ impl SelectionState {
             version: String::new(),
             server_software: String::new(),
             field: AddingField::Name,
-            error_message: TempMessage::new(Duration::from_secs(2)),
+            error_messages: AdditionStateErrorMessages::new(Duration::from_secs(2)),
         })
     }
 

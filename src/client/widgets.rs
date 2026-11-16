@@ -311,13 +311,18 @@ impl<'a, D: LazyDefault<'a>> Widget for &'a Input<'a, D> {
 pub struct Addition<'a> {
     addition_state: &'a AdditionState,
     blinking: bool,
+    terminal_interface_config: &'a TerminalInterfaceConfig,
 }
 
 impl<'a> Addition<'a> {
-    pub fn new(addition_state: &'a AdditionState) -> Self {
+    pub fn new(
+        addition_state: &'a AdditionState,
+        terminal_interface_config: &'a TerminalInterfaceConfig,
+    ) -> Self {
         Self {
             addition_state,
             blinking: false,
+            terminal_interface_config,
         }
     }
 
@@ -335,20 +340,31 @@ impl<'a> Widget for Addition<'a> {
         let Self {
             addition_state,
             blinking,
+            terminal_interface_config,
         } = self;
 
+        let bg_color = terminal_interface_config
+            .background_color
+            .unwrap_or(Color::Reset);
+
         let name_input = Input::new("Name", &addition_state.name, DEFAULT_NAME_INPUT)
-            .blinking(blinking && matches!(addition_state.field, AddingField::Name));
+            .blinking(blinking && matches!(addition_state.field, AddingField::Name))
+            .error(addition_state.error_messages.name.get_str())
+            .bg(bg_color);
 
         let version_input = Input::new("Version", &addition_state.version, DEFAULT_VERSION_INPUT)
-            .blinking(blinking && matches!(addition_state.field, AddingField::Version));
+            .blinking(blinking && matches!(addition_state.field, AddingField::Version))
+            .error(addition_state.error_messages.version.get_str())
+            .bg(bg_color);
 
         let software_input = Input::new(
             "Server",
             &addition_state.server_software,
             DEFAULT_SOFTWARE_INPUT,
         )
-        .blinking(blinking && matches!(addition_state.field, AddingField::Software));
+        .blinking(blinking && matches!(addition_state.field, AddingField::Software))
+        .error(addition_state.error_messages.server_software.get_str())
+        .bg(bg_color);
 
         let x = area.x;
         let width = area.width;
@@ -414,17 +430,20 @@ impl Widget for Deletion<'_> {
         Self: Sized,
     {
         let Self {
-            deletion_state: deleting_state,
+            deletion_state,
             blinking,
             terminal_interface_config,
         } = self;
 
         let input = Input::new(
-            format!("Deleting {}", deleting_state.entry_type),
-            &deleting_state.confirmation,
-            || format!("Type {} here to confirm", deleting_state.name),
+            format!(
+                "Type `{}` to delete {}",
+                deletion_state.name, deletion_state.entry_type
+            ),
+            &deletion_state.confirmation,
+            deletion_state.name.as_str(),
         )
-        .error(deleting_state.error_message.get_str())
+        .error(deletion_state.error_message.get_str())
         .blinking(blinking)
         .bg(terminal_interface_config
             .background_color

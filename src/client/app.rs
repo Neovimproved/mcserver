@@ -16,7 +16,7 @@ use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::Style,
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
@@ -348,10 +348,13 @@ impl App {
                                 let Ok(server_software) =
                                     ServerSoftware::from_str(&addition_state.server_software)
                                 else {
-                                    addition_state.error_message.insert(format!(
-                                        "`{}` is not a valid server software",
-                                        addition_state.server_software
-                                    ));
+                                    addition_state
+                                        .error_messages
+                                        .server_software
+                                        .insert(format!(
+                                            "`{}` is not a valid server software",
+                                            addition_state.server_software
+                                        ));
                                     return Ok(());
                                 };
 
@@ -366,7 +369,10 @@ impl App {
                                 match Version::from_str(&addition_state.version) {
                                     Ok(version) => Some(version),
                                     Err(err) => {
-                                        addition_state.error_message.insert(err.to_string());
+                                        addition_state
+                                            .error_messages
+                                            .version
+                                            .insert(err.to_string());
                                         return Ok(());
                                     }
                                 }
@@ -421,7 +427,7 @@ impl App {
                         } else {
                             deletion_state
                                 .error_message
-                                .insert(format!("Failed to rename {}", deletion_state.entry_type));
+                                .insert(format!("Failed to delete {}", deletion_state.entry_type));
                         }
                     }
                     KeyCode::Delete => todo!(
@@ -859,8 +865,9 @@ impl App {
                             POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
                         ))[1];
 
+                        frame.render_widget(Clear, addition_area);
                         frame.render_widget(
-                            Addition::new(addition_state).blinking(self.blinking),
+                            Addition::new(addition_state, self.ti_cfg()).blinking(self.blinking),
                             addition_area,
                         );
                     }
@@ -877,6 +884,7 @@ impl App {
                         let deletion_widget =
                             Deletion::new(deletion_state, self.blinking, self.ti_cfg());
 
+                        frame.render_widget(Clear, area);
                         frame.render_widget(deletion_widget, area);
                     }
                 }
