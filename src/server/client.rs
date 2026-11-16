@@ -70,7 +70,8 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             .wrap_err("Failed to delete server")
     }
 
-    async fn send_synchronization_payload(&mut self) -> Result<()> {
+    // TODO: synchronize here
+    async fn synchronize_and_send(&mut self) -> Result<()> {
         let message = ServerMessage::SynchronizationPayload {
             online_servers: self
                 .server_communicators
@@ -110,9 +111,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
                 ClientMessage::Delete { server } => self.delete_server(server).await?,
 
-                ClientMessage::SynchronizationRequest => {
-                    self.send_synchronization_payload().await?
-                }
+                ClientMessage::SynchronizationRequest => self.synchronize_and_send().await?,
 
                 _ => {
                     let writer = &mut self.writer;
@@ -155,7 +154,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             ClientMessage::ProgramInput(bytes) => message_sender
                 .send(ServerInstruction::SendInput(bytes))
                 .wrap_err("Failed to send input instruction")?,
-            ClientMessage::SynchronizationRequest => self.send_synchronization_payload().await?,
+            ClientMessage::SynchronizationRequest => self.synchronize_and_send().await?,
         }
 
         Ok(action)
@@ -228,7 +227,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     pub async fn serve(&mut self) -> Result<()> {
-        self.send_synchronization_payload().await?;
+        self.synchronize_and_send().await?;
 
         loop {
             match &self.action {
