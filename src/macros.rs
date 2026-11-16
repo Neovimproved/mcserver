@@ -9,7 +9,6 @@ macro_rules! log {
             eprintln!($($arg)*);
         }
     }};
-
 }
 
 #[macro_export]
