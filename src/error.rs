@@ -33,7 +33,7 @@ pub enum Error {
 
     Bitcode(bitcode::Error),
 
-    #[display("Received an empty path for a server creation request")]
+    #[display("Received an empty path for a server delete request")]
     EmptyPath,
 
     #[display("Path was escaped: `{}`", display_path(_0))]
@@ -58,6 +58,9 @@ pub enum Error {
     #[display("`{}` could not be converted to string", display_path(_0))]
     #[from(ignore)]
     NonUtf8Path(#[error(not(source))] PathBuf),
+
+    #[display("Server with path `{}` already exists", display_path(_0))]
+    ServerAlreadyExists(#[error(not(source))] PathBuf),
 
     #[display("Connection type {_0} is not supported")]
     UnsupportedConnectionType(#[error(not(source))] String),
