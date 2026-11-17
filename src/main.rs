@@ -19,7 +19,7 @@ mod cli;
 mod client;
 mod communication;
 mod config;
-mod creator;
+mod crud;
 mod error;
 mod line_buffer;
 mod macros;

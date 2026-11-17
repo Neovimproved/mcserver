@@ -1,7 +1,6 @@
 use color_eyre::eyre::{Context, Result, eyre};
 use dashmap::DashMap;
 use tokio::{
-    fs,
     io::{self, AsyncReadExt, AsyncWriteExt},
     select,
     sync::{RwLock, broadcast, mpsc::UnboundedSender, oneshot},
@@ -9,7 +8,7 @@ use tokio::{
 
 use crate::{
     config::Config,
-    creator, error,
+    crud, error,
     line_buffer::LineBuffer,
     messages::{ClientMessage, MAX_MESSAGE_LENGTH, ServerInstruction, ServerMessage},
     read_message,
@@ -50,26 +49,6 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         }
     }
 
-    async fn delete_server(&self, name: String) -> Result<()> {
-        let servers_directory = &self.config.read().await.servers_directory.path;
-
-        let Ok(target_directory) = fs::canonicalize(servers_directory.join(&name)).await else {
-            eprintln!("The client is being malicious");
-            return Ok(());
-        };
-
-        if !target_directory.starts_with(servers_directory)
-            || target_directory == *servers_directory
-        {
-            eprintln!("The client is actually trying to delete files");
-            return Ok(());
-        }
-
-        fs::remove_dir_all(self.config.read().await.servers_directory.path.join(name))
-            .await
-            .wrap_err("Failed to delete server")
-    }
-
     // TODO: synchronize here
     async fn synchronize_and_send(&mut self) -> Result<()> {
         let message = ServerMessage::SynchronizationPayload {
@@ -104,12 +83,12 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
                 ClientMessage::Attach { server } => break Ok(ServeAction::Attach(server)),
 
                 ClientMessage::Create(create_message) => {
-                    creator::Builder::new()
+                    crud::Creator::new()
                         .build(self.config, create_message)
                         .await?;
                 }
 
-                ClientMessage::Delete { server } => self.delete_server(server).await?,
+                ClientMessage::Delete { server } => crud::delete(self.config, server).await?,
 
                 ClientMessage::SynchronizationRequest => self.synchronize_and_send().await?,
 
@@ -142,11 +121,11 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
         match message {
             ClientMessage::Attach { server } => action = Some(ServeAction::Attach(server)),
             ClientMessage::Create(create_message) => {
-                creator::Builder::new()
+                crud::Creator::new()
                     .build(self.config, create_message)
                     .await?;
             }
-            ClientMessage::Delete { server } => self.delete_server(server).await?,
+            ClientMessage::Delete { server } => crud::delete(self.config, server).await?,
             ClientMessage::Detach => action = Some(ServeAction::Prompt),
             ClientMessage::Kill => message_sender
                 .send(ServerInstruction::Kill)

@@ -1,10 +1,10 @@
-use std::{borrow::Cow, collections::HashSet};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
 use bitcode::{Decode, Encode};
 use derive_more::Display;
 
 use crate::{
-    creator::{ServerSoftware, Version},
+    crud::{ServerSoftwareType, Version},
     line_buffer::LineBuffer,
 };
 
@@ -91,12 +91,26 @@ pub enum ServerMessage {
     SynchronizationPayload { online_servers: HashSet<String> },
 }
 
-#[derive(Debug, Decode, Display, Encode)]
-#[display("Create server with path `{path}`, software `{server_software}`, version `{}`", version.map(|v| v.to_string()).as_deref().unwrap_or("latest") )]
+#[derive(Debug, Decode, Encode)]
 pub struct CreateMessage {
     pub path: String,
-    pub server_software: ServerSoftware,
+    pub server_software: ServerSoftwareType,
     pub version: Option<Version>,
+}
+
+impl fmt::Display for CreateMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Create server with path `{}`, software `{}`, version `{}`",
+            self.path,
+            self.server_software,
+            self.version
+                .map(|v| v.to_string())
+                .as_deref()
+                .unwrap_or("latest")
+        )
+    }
 }
 
 #[derive(Debug, Decode, Display, Encode)]

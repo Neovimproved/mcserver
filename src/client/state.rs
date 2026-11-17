@@ -81,13 +81,13 @@ impl AddingField {
 }
 
 #[derive(Debug)]
-pub struct AdditionStateErrorMessages {
+pub struct CreateStateErrorMessages {
     pub name: TempMessage,
     pub version: TempMessage,
     pub server_software: TempMessage,
 }
 
-impl AdditionStateErrorMessages {
+impl CreateStateErrorMessages {
     fn new(duration: Duration) -> Self {
         Self {
             name: TempMessage::new(duration),
@@ -98,16 +98,16 @@ impl AdditionStateErrorMessages {
 }
 
 #[derive(Debug)]
-pub struct AdditionState {
+pub struct CreateState {
     pub name: String,
     pub version: String,
     pub server_software: String,
     pub field: AddingField,
-    pub error_messages: AdditionStateErrorMessages,
+    pub error_messages: CreateStateErrorMessages,
 }
 
 #[derive(Debug)]
-pub struct DeletionState {
+pub struct DeleteState {
     pub name: String,
     pub confirmation: String,
     pub error_message: TempMessage,
@@ -117,8 +117,8 @@ pub struct DeletionState {
 #[derive(Debug)]
 pub enum SelectionState {
     Normal,
-    Adding(AdditionState),
-    Deleting(DeletionState),
+    Creating(CreateState),
+    Deleting(DeleteState),
 }
 
 impl SelectionState {
@@ -127,17 +127,17 @@ impl SelectionState {
     }
 
     pub fn adding() -> Self {
-        Self::Adding(AdditionState {
+        Self::Creating(CreateState {
             name: String::new(),
             version: String::new(),
             server_software: String::new(),
             field: AddingField::Name,
-            error_messages: AdditionStateErrorMessages::new(Duration::from_secs(2)),
+            error_messages: CreateStateErrorMessages::new(Duration::from_secs(2)),
         })
     }
 
     pub fn deleting(entry: &ServerEntry) -> Self {
-        Self::Deleting(DeletionState {
+        Self::Deleting(DeleteState {
             name: entry.name().to_string(),
             entry_type: entry.ty(),
             confirmation: "".to_string(),

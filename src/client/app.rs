@@ -29,10 +29,10 @@ use crate::{
         state::{
             AbsoluteArea, AddingField, ConnectionState, Lines, Mode, SelectionState, ServerList,
         },
-        widgets::{Addition, Deletion, ServersList},
+        widgets::{Create, Delete, ServersList},
     },
     config::{self, Config, TerminalInterfaceConfig},
-    creator::{ServerSoftware, Version},
+    crud::{ServerSoftwareType, Version},
     line_buffer::LineBuffer,
     log,
     messages::{ClientMessage, CreateMessage, ServerMessage, display_bytes},
@@ -304,15 +304,15 @@ impl App {
 
                     _ => self.list_motion(key, writer).await?,
                 },
-                SelectionState::Adding(addition_state) => match key.code {
+                SelectionState::Creating(create_state) => match key.code {
                     KeyCode::Esc => selection_state.reset(),
                     KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         match ch {
                             'h' => {
-                                let input_string = match addition_state.field {
-                                    AddingField::Name => &mut addition_state.name,
-                                    AddingField::Version => &mut addition_state.version,
-                                    AddingField::Software => &mut addition_state.server_software,
+                                let input_string = match create_state.field {
+                                    AddingField::Name => &mut create_state.name,
+                                    AddingField::Version => &mut create_state.version,
+                                    AddingField::Software => &mut create_state.server_software,
                                 };
 
                                 while let Some(last) = input_string.chars().next_back()
@@ -332,54 +332,48 @@ impl App {
                         }
                     }
 
-                    KeyCode::Char(ch) => match addition_state.field {
-                        AddingField::Name => &mut addition_state.name,
-                        AddingField::Version => &mut addition_state.version,
-                        AddingField::Software => &mut addition_state.server_software,
+                    KeyCode::Char(ch) => match create_state.field {
+                        AddingField::Name => &mut create_state.name,
+                        AddingField::Version => &mut create_state.version,
+                        AddingField::Software => &mut create_state.server_software,
                     }
                     .push(ch),
                     // TODO: actually create the server here
                     KeyCode::Enter => {
-                        if addition_state.field.next() {
-                            let server_software = if addition_state.server_software.is_empty() {
+                        if create_state.field.next() {
+                            let server_software = if create_state.server_software.is_empty() {
                                 // vanilla
-                                ServerSoftware::default()
+                                ServerSoftwareType::default()
                             } else {
                                 let Ok(server_software) =
-                                    ServerSoftware::from_str(&addition_state.server_software)
+                                    ServerSoftwareType::from_str(&create_state.server_software)
                                 else {
-                                    addition_state
-                                        .error_messages
-                                        .server_software
-                                        .insert(format!(
-                                            "`{}` is not a valid server software",
-                                            addition_state.server_software
-                                        ));
+                                    create_state.error_messages.server_software.insert(format!(
+                                        "`{}` is not a valid server software",
+                                        create_state.server_software
+                                    ));
                                     return Ok(());
                                 };
 
                                 server_software
                             };
 
-                            let version = if addition_state.version.is_empty() {
+                            let version = if create_state.version.is_empty() {
                                 log!("Empty!");
                                 None
                             } else {
-                                log!("Parsing `{}`", addition_state.version);
-                                match Version::from_str(&addition_state.version) {
+                                log!("Parsing `{}`", create_state.version);
+                                match Version::from_str(&create_state.version) {
                                     Ok(version) => Some(version),
                                     Err(err) => {
-                                        addition_state
-                                            .error_messages
-                                            .version
-                                            .insert(err.to_string());
+                                        create_state.error_messages.version.insert(err.to_string());
                                         return Ok(());
                                     }
                                 }
                             };
 
                             let message = CreateMessage {
-                                path: mem::take(&mut addition_state.name),
+                                path: mem::take(&mut create_state.name),
                                 server_software,
                                 version,
                             };
@@ -393,66 +387,66 @@ impl App {
                         }
                     }
                     KeyCode::Tab => {
-                        addition_state.field.next();
+                        create_state.field.next();
                     }
                     KeyCode::BackTab => {
-                        addition_state.field.prev();
+                        create_state.field.prev();
                     }
                     KeyCode::Backspace => {
-                        match addition_state.field {
-                            AddingField::Name => &mut addition_state.name,
-                            AddingField::Version => &mut addition_state.version,
-                            AddingField::Software => &mut addition_state.server_software,
+                        match create_state.field {
+                            AddingField::Name => &mut create_state.name,
+                            AddingField::Version => &mut create_state.version,
+                            AddingField::Software => &mut create_state.server_software,
                         }
                         .pop();
                     }
                     _ => {}
                 },
-                SelectionState::Deleting(deletion_state) => match key.code {
+                SelectionState::Deleting(delete_state) => match key.code {
                     KeyCode::Backspace => {
-                        deletion_state.confirmation.pop();
+                        delete_state.confirmation.pop();
                     }
                     KeyCode::Enter => {
-                        if deletion_state.name == deletion_state.confirmation {
+                        if delete_state.name == delete_state.confirmation {
                             write_message!(
                                 writer,
                                 ClientMessage::Delete {
-                                    server: mem::take(&mut deletion_state.name)
+                                    server: mem::take(&mut delete_state.name)
                                 }
                             )
                             .await
                             .into_diagnostic()
-                            .wrap_err("Failed to send server deletion message")?;
+                            .wrap_err("Failed to send server delete message")?;
                             selection_state.reset();
                         } else {
-                            deletion_state
+                            delete_state
                                 .error_message
-                                .insert(format!("Failed to delete {}", deletion_state.entry_type));
+                                .insert(format!("Failed to delete {}", delete_state.entry_type));
                         }
                     }
-                    KeyCode::Delete => todo!(
-                        "Delete char is not yet implemented in deletion mode yet unfortunately"
-                    ),
+                    KeyCode::Delete => {
+                        todo!("Delete char is not yet implemented in delete mode yet unfortunately")
+                    }
                     KeyCode::Char(ch) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         match ch {
                             'h' => {
-                                while let Some(ch) = deletion_state.confirmation.chars().next_back()
+                                while let Some(ch) = delete_state.confirmation.chars().next_back()
                                     && ch == ' '
                                 {
-                                    deletion_state.confirmation.pop();
+                                    delete_state.confirmation.pop();
                                 }
 
-                                while let Some(ch) = deletion_state.confirmation.chars().next_back()
+                                while let Some(ch) = delete_state.confirmation.chars().next_back()
                                     && ch != ' '
                                 {
-                                    deletion_state.confirmation.pop();
+                                    delete_state.confirmation.pop();
                                 }
                             }
                             'q' => self.exit(),
                             _ => {}
                         }
                     }
-                    KeyCode::Char(ch) => deletion_state.confirmation.push(ch),
+                    KeyCode::Char(ch) => delete_state.confirmation.push(ch),
                     KeyCode::Esc => selection_state.reset(),
                     _ => {}
                 },
@@ -855,8 +849,8 @@ impl App {
 
                 match selection_state {
                     SelectionState::Normal => {}
-                    SelectionState::Adding(addition_state) => {
-                        let addition_area = Layout::vertical([
+                    SelectionState::Creating(create_state) => {
+                        let area = Layout::vertical([
                             Constraint::Length(frame_area.height.saturating_sub(9) / 2),
                             Constraint::Length(9),
                         ])
@@ -865,13 +859,13 @@ impl App {
                             POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
                         ))[1];
 
-                        frame.render_widget(Clear, addition_area);
+                        frame.render_widget(Clear, area);
                         frame.render_widget(
-                            Addition::new(addition_state, self.ti_cfg()).blinking(self.blinking),
-                            addition_area,
+                            Create::new(create_state, self.ti_cfg()).blinking(self.blinking),
+                            area,
                         );
                     }
-                    SelectionState::Deleting(deletion_state) => {
+                    SelectionState::Deleting(delete_state) => {
                         let area = Layout::vertical([
                             Constraint::Length((frame_area.height.saturating_sub(3)) / 2),
                             Constraint::Length(3),
@@ -881,11 +875,10 @@ impl App {
                             POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
                         ))[1];
 
-                        let deletion_widget =
-                            Deletion::new(deletion_state, self.blinking, self.ti_cfg());
+                        let delete_widget = Delete::new(delete_state, self.blinking, self.ti_cfg());
 
                         frame.render_widget(Clear, area);
-                        frame.render_widget(deletion_widget, area);
+                        frame.render_widget(delete_widget, area);
                     }
                 }
             }

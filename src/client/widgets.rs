@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    client::state::{AddingField, AdditionState, DeletionState},
+    client::state::{AddingField, CreateState, DeleteState},
     config::TerminalInterfaceConfig,
     servers::ServerEntry,
 };
@@ -308,19 +308,19 @@ impl<'a, D: LazyDefault<'a>> Widget for &'a Input<'a, D> {
     }
 }
 
-pub struct Addition<'a> {
-    addition_state: &'a AdditionState,
+pub struct Create<'a> {
+    create_state: &'a CreateState,
     blinking: bool,
     terminal_interface_config: &'a TerminalInterfaceConfig,
 }
 
-impl<'a> Addition<'a> {
+impl<'a> Create<'a> {
     pub fn new(
-        addition_state: &'a AdditionState,
+        create_state: &'a CreateState,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
         Self {
-            addition_state,
+            create_state,
             blinking: false,
             terminal_interface_config,
         }
@@ -332,13 +332,13 @@ impl<'a> Addition<'a> {
     }
 }
 
-impl<'a> Widget for Addition<'a> {
+impl<'a> Widget for Create<'a> {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
         let Self {
-            addition_state,
+            create_state,
             blinking,
             terminal_interface_config,
         } = self;
@@ -347,23 +347,23 @@ impl<'a> Widget for Addition<'a> {
             .background_color
             .unwrap_or(Color::Reset);
 
-        let name_input = Input::new("Name", &addition_state.name, DEFAULT_NAME_INPUT)
-            .blinking(blinking && matches!(addition_state.field, AddingField::Name))
-            .error(addition_state.error_messages.name.get_str())
+        let name_input = Input::new("Name", &create_state.name, DEFAULT_NAME_INPUT)
+            .blinking(blinking && matches!(create_state.field, AddingField::Name))
+            .error(create_state.error_messages.name.get_str())
             .bg(bg_color);
 
-        let version_input = Input::new("Version", &addition_state.version, DEFAULT_VERSION_INPUT)
-            .blinking(blinking && matches!(addition_state.field, AddingField::Version))
-            .error(addition_state.error_messages.version.get_str())
+        let version_input = Input::new("Version", &create_state.version, DEFAULT_VERSION_INPUT)
+            .blinking(blinking && matches!(create_state.field, AddingField::Version))
+            .error(create_state.error_messages.version.get_str())
             .bg(bg_color);
 
         let software_input = Input::new(
             "Server",
-            &addition_state.server_software,
+            &create_state.server_software,
             DEFAULT_SOFTWARE_INPUT,
         )
-        .blinking(blinking && matches!(addition_state.field, AddingField::Software))
-        .error(addition_state.error_messages.server_software.get_str())
+        .blinking(blinking && matches!(create_state.field, AddingField::Software))
+        .error(create_state.error_messages.server_software.get_str())
         .bg(bg_color);
 
         let x = area.x;
@@ -404,33 +404,33 @@ impl<'a> Widget for Addition<'a> {
     }
 }
 
-pub struct Deletion<'a> {
-    deletion_state: &'a DeletionState,
+pub struct Delete<'a> {
+    delete_state: &'a DeleteState,
     blinking: bool,
     terminal_interface_config: &'a TerminalInterfaceConfig,
 }
 
-impl<'a> Deletion<'a> {
+impl<'a> Delete<'a> {
     pub fn new(
-        deletion_state: &'a DeletionState,
+        delete_state: &'a DeleteState,
         blinking: bool,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
         Self {
-            deletion_state,
+            delete_state,
             blinking,
             terminal_interface_config,
         }
     }
 }
 
-impl Widget for Deletion<'_> {
+impl Widget for Delete<'_> {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
         Self: Sized,
     {
         let Self {
-            deletion_state,
+            delete_state,
             blinking,
             terminal_interface_config,
         } = self;
@@ -438,12 +438,12 @@ impl Widget for Deletion<'_> {
         let input = Input::new(
             format!(
                 "Type `{}` to delete {}",
-                deletion_state.name, deletion_state.entry_type
+                delete_state.name, delete_state.entry_type
             ),
-            &deletion_state.confirmation,
-            deletion_state.name.as_str(),
+            &delete_state.confirmation,
+            delete_state.name.as_str(),
         )
-        .error(deletion_state.error_message.get_str())
+        .error(delete_state.error_message.get_str())
         .blinking(blinking)
         .bg(terminal_interface_config
             .background_color
