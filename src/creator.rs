@@ -8,10 +8,7 @@ use std::{
 use bitcode::{Decode, Encode};
 use color_eyre::eyre::{Context, ContextCompat, Result, bail};
 use derive_more::{Display, Error, From};
-use reqwest::{
-    IntoUrl,
-    header::{self, HeaderValue},
-};
+use reqwest::header::{self, HeaderValue};
 use serde::Deserialize;
 use tokio::{fs, sync::RwLock};
 
@@ -131,7 +128,16 @@ trait CreateSoftware<T>: Software<T> {
     async fn create_jar(&self, version: Option<Version>, server_dir: &Path) -> Result<String>;
 }
 
-trait DownloadableJarSoftware {}
+struct DownloadableJarSoftware {
+    url: String,
+    version: String,
+}
+
+impl DownloadableJarSoftware {
+    pub fn new(url: String, version: String) -> Self {
+        Self { url, version }
+    }
+}
 
 async fn extract_response_file_name(response: &reqwest::Response) -> Result<Option<&str>> {
     let file_name = response
@@ -145,9 +151,12 @@ async fn extract_response_file_name(response: &reqwest::Response) -> Result<Opti
     Ok(file_name)
 }
 
-impl<T: Software<U> + DownloadableJarSoftware, U: IntoUrl> CreateSoftware<U> for T {
+impl<T: Software<DownloadableJarSoftware>> CreateSoftware<DownloadableJarSoftware> for T {
     async fn create_jar(&self, version: Option<Version>, server_dir: &Path) -> Result<String> {
-        let url = self.get(version).await?;
+        let DownloadableJarSoftware {
+            url,
+            version: version_used,
+        } = self.get(version).await?;
 
         let response = reqwest::get(url)
             .await
@@ -159,10 +168,7 @@ impl<T: Software<U> + DownloadableJarSoftware, U: IntoUrl> CreateSoftware<U> for
 
         let bytes = response.bytes().await?;
 
-        let file_name = file_name.unwrap_or_else(|| match version {
-            Some(version) => format!("{}-{version}.jar", T::NAME),
-            None => format!("{}-latest.jar", T::NAME),
-        });
+        let file_name = file_name.unwrap_or_else(|| format!("{}-{version_used}.jar", T::NAME));
 
         let file_path = server_dir.join(&file_name);
 
@@ -192,10 +198,10 @@ struct FabricSoftware<B> {
     base_url: B,
 }
 
-impl<B: Display> Software<String> for FabricSoftware<B> {
+impl<B: Display> Software<DownloadableJarSoftware> for FabricSoftware<B> {
     const NAME: &str = "fabric";
 
-    async fn get(&self, version: Option<Version>) -> Result<String> {
+    async fn get(&self, version: Option<Version>) -> Result<DownloadableJarSoftware> {
         let response = reqwest::get(self.base_url.to_string())
             .await
             .wrap_err("Get request failed")?;
@@ -223,24 +229,25 @@ impl<B: Display> Software<String> for FabricSoftware<B> {
             None => bail!("No stable installer was found"),
         };
 
-        Ok(dbg!(format!(
-            "{}/loader/{}/{}/{}/server/jar",
-            self.base_url, game_version, loader_version, installer_version
-        )))
+        Ok(DownloadableJarSoftware::new(
+            format!(
+                "{}/loader/{}/{}/{}/server/jar",
+                self.base_url, game_version, loader_version, installer_version
+            ),
+            game_version,
+        ))
     }
 }
-
-impl<B> DownloadableJarSoftware for FabricSoftware<B> {}
 
 #[derive(Debug, From)]
 struct PaperSoftware<B> {
     base_url: B,
 }
 
-impl<B: Display> Software<String> for PaperSoftware<B> {
+impl<B: Display> Software<DownloadableJarSoftware> for PaperSoftware<B> {
     const NAME: &str = "paper";
 
-    async fn get(&self, version: Option<Version>) -> Result<String> {
+    async fn get(&self, version: Option<Version>) -> Result<DownloadableJarSoftware> {
         let version: PaperVersion = match version {
             Some(version) => {
                 let version_url = format!("{}/versions/{version}", self.base_url);
@@ -292,11 +299,12 @@ impl<B: Display> Software<String> for PaperSoftware<B> {
             .await
             .wrap_err("Failed to convert response into json")?;
 
-        Ok(build.downloads.server_default.url)
+        Ok(DownloadableJarSoftware::new(
+            build.downloads.server_default.url,
+            version_id,
+        ))
     }
 }
-
-impl<B> DownloadableJarSoftware for PaperSoftware<B> {}
 
 #[derive(Debug, Deserialize)]
 struct PaperVersionData {
