@@ -634,7 +634,9 @@ impl App {
                     .into_diagnostic()
                     .wrap_err("Failed to deserialize new server entries")?;
 
-                self.server_list.servers.replicate_expansion(&mut updated);
+                self.server_list
+                    .servers
+                    .replicate_expansion_to(&mut updated);
 
                 self.server_list.servers = updated;
             }

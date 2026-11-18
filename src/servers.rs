@@ -160,16 +160,19 @@ pub enum ServerEntryType {
 }
 
 pub trait ReplicateExpansion {
-    fn replicate_expansion(&self, other: &mut Self);
+    fn replicate_expansion_to(&self, other: &mut Self);
 }
 
 impl ReplicateExpansion for BTreeMap<String, ServerEntry> {
-    fn replicate_expansion(&self, other: &mut Self) {
+    fn replicate_expansion_to(&self, other: &mut Self) {
         for (name, entry) in self {
             if let ServerEntry::Group(server_group) = entry
                 && let Some(ServerEntry::Group(other_group)) = other.get_mut(name)
             {
                 other_group.expanded = server_group.expanded;
+                server_group
+                    .children
+                    .replicate_expansion_to(&mut other_group.children);
             }
         }
     }
