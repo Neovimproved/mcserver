@@ -1,15 +1,16 @@
 use std::{
-    cmp,
+    collections::{BTreeMap, HashSet},
     fmt::{self, Display},
     path::{Path, PathBuf},
 };
 
+use color_eyre::eyre::{Context, ContextCompat, bail};
 use derive_more::Display;
-use miette::{Context, IntoDiagnostic};
 use ratatui::{
     style::Stylize,
-    text::{Line, Span, ToSpan},
+    text::{Line, Span},
 };
+use serde::{Deserialize, Serialize};
 use tokio::fs::{self, DirEntry, ReadDir};
 
 use crate::{
@@ -18,24 +19,43 @@ use crate::{
     metadata,
 };
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+const SERVER_GROUP_ANSI_COLOR: u8 = 34;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ServerEntry {
+    Group(ServerGroup),
+    Object(ServerObject),
+}
+
+impl ServerEntry {
+    pub fn ty(&self) -> ServerEntryType {
+        match self {
+            ServerEntry::Group(_) => ServerEntryType::Group,
+            ServerEntry::Object(_) => ServerEntryType::Object,
+        }
+    }
+}
+
+impl ServerEntry {
+    fn object(online: bool) -> Self {
+        Self::Object(ServerObject { online })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServerGroup {
-    pub name: String,
-    pub children: Vec<ServerEntry>,
+    pub children: BTreeMap<String, ServerEntry>,
+    #[serde(skip)]
     pub expanded: bool,
 }
 
 impl ServerGroup {
-    pub fn new(name: String, children: Vec<ServerEntry>, expanded: bool) -> Self {
-        Self {
-            name,
-            children,
-            expanded,
-        }
+    pub fn new(children: BTreeMap<String, ServerEntry>, expanded: bool) -> Self {
+        Self { children, expanded }
     }
 
     fn find_first_online(&self) -> Option<&ServerObject> {
-        for child in &self.children {
+        for child in self.children.values() {
             match child {
                 ServerEntry::Group(server_group) => {
                     if let Some(active) = server_group.find_first_online() {
@@ -55,6 +75,7 @@ impl ServerGroup {
 
     pub fn fold_to_line<'a>(
         &'a self,
+        name: &'a str,
         mut spans: Vec<Span<'a>>,
         is_selected: bool,
         ti_cfg: &'a TerminalInterfaceConfig,
@@ -74,7 +95,7 @@ impl ServerGroup {
             }
         });
 
-        spans.push(Span::from(&self.name));
+        spans.push(Span::from(name));
 
         if is_selected {
             Line::from(spans).bg(ti_cfg.selected_color)
@@ -84,29 +105,21 @@ impl ServerGroup {
     }
 }
 
-const SERVER_GROUP_ANSI_COLOR: u8 = 34;
-
 impl Display for ServerGroup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if f.alternate() {
-            write!(f, "\x1b[1;{SERVER_GROUP_ANSI_COLOR}m{}\x1b[0m", self.name)?;
-        } else {
-            write!(f, "{}", self.name)?;
-        }
-
         display_entries(&self.children, f, "", f.width().unwrap_or(3), f.alternate())
     }
 }
 
-#[derive(Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServerObject {
-    pub name: String,
     pub online: bool,
 }
 
 impl ServerObject {
     pub fn fold_to_line<'a>(
         &'a self,
+        name: &'a str,
         mut spans: Vec<Span<'a>>,
         is_attached: bool,
         is_selected: bool,
@@ -118,7 +131,7 @@ impl ServerObject {
                     .server_online_symbol
                     .as_str()
                     .fg(ti_cfg.server_online_color),
-                self.name.to_span(),
+                Span::from(name),
             ]
         } else {
             [
@@ -126,7 +139,7 @@ impl ServerObject {
                     .server_offline_symbol
                     .as_str()
                     .fg(ti_cfg.server_offline_color),
-                self.name.to_span(),
+                Span::from(name),
             ]
         });
 
@@ -146,76 +159,39 @@ pub enum ServerEntryType {
     Object,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub enum ServerEntry {
-    Group(ServerGroup),
-    Object(ServerObject),
+pub trait ReplicateExpansion {
+    fn replicate_expansion(&self, other: &mut Self);
 }
 
-impl ServerEntry {
-    pub fn name(&self) -> &str {
-        match self {
-            ServerEntry::Group(server_group) => &server_group.name,
-            ServerEntry::Object(server_object) => &server_object.name,
-        }
-    }
-
-    pub fn ty(&self) -> ServerEntryType {
-        match self {
-            ServerEntry::Group(_) => ServerEntryType::Group,
-            ServerEntry::Object(_) => ServerEntryType::Object,
-        }
-    }
-}
-
-impl Ord for ServerEntry {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.name().cmp(other.name())
-    }
-}
-
-impl PartialOrd for ServerEntry {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl ServerEntry {
-    fn object(name: String, online: bool) -> Self {
-        Self::Object(ServerObject { name, online })
-    }
-}
-
-impl Display for ServerEntry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ServerEntry::Group(server_group) => write!(f, "{server_group}"),
-            ServerEntry::Object(server_object) => write!(f, "{}", server_object.name),
+impl ReplicateExpansion for BTreeMap<String, ServerEntry> {
+    fn replicate_expansion(&self, other: &mut Self) {
+        for (name, entry) in self {
+            if let ServerEntry::Group(server_group) = entry
+                && let Some(ServerEntry::Group(other_group)) = other.get_mut(name)
+            {
+                other_group.expanded = server_group.expanded;
+            }
         }
     }
 }
 
 pub fn display_entries(
-    entries: &[ServerEntry],
+    entries: &BTreeMap<String, ServerEntry>,
     f: &mut fmt::Formatter,
     base_indentation: &str,
     indentation_width: usize,
     ansi_colors: bool,
 ) -> fmt::Result {
-    for (idx, entry) in entries.iter().enumerate() {
+    for (idx, (name, entry)) in entries.iter().enumerate() {
         match entry {
             ServerEntry::Group(server_group) => {
                 if idx == entries.len().saturating_sub(1) {
                     write!(f, "\n{base_indentation}└──")?;
 
                     if ansi_colors {
-                        write!(
-                            f,
-                            "\x1b[1;{SERVER_GROUP_ANSI_COLOR}m{}\x1b[0m",
-                            server_group.name
-                        )?;
+                        write!(f, "\x1b[1;{SERVER_GROUP_ANSI_COLOR}m{}\x1b[0m", name)?;
                     } else {
-                        write!(f, "{}", server_group.name)?;
+                        write!(f, "{}", name)?;
                     }
 
                     display_entries(
@@ -229,9 +205,9 @@ pub fn display_entries(
                     write!(f, "\n{base_indentation}├──")?;
 
                     if ansi_colors {
-                        write!(f, "\x1b[1;34m{}\x1b[0m", server_group.name)?;
+                        write!(f, "\x1b[1;34m{}\x1b[0m", name)?;
                     } else {
-                        write!(f, "{}", server_group.name)?;
+                        write!(f, "{}", name)?;
                     }
 
                     display_entries(
@@ -246,7 +222,8 @@ pub fn display_entries(
                     )
                 }
             }
-            ServerEntry::Object(server_object) => {
+            // TODO: show if online
+            ServerEntry::Object(_server_object) => {
                 if idx == entries.len().saturating_sub(1) {
                     write!(f, "\n{base_indentation}└──")?;
                 } else {
@@ -259,7 +236,7 @@ pub fn display_entries(
                 //     writeln!(f, "{}", server_object.name)
                 // }
 
-                write!(f, "{}", server_object.name)
+                write!(f, "{}", name)
             }
         }?;
     }
@@ -269,61 +246,49 @@ pub fn display_entries(
 
 struct ReadFrame {
     path: PathBuf,
-    entries: Vec<ServerEntry>,
+    entries: BTreeMap<String, ServerEntry>,
     read_dir: ReadDir,
 }
 
 impl ReadFrame {
-    async fn try_new(path: PathBuf) -> miette::Result<Self> {
+    async fn try_new(path: PathBuf) -> color_eyre::Result<Self> {
         let read_dir = fs::read_dir(&path)
             .await
-            .into_diagnostic()
             .wrap_err_with(|| format!("Failed to read directory `{}`", display_path(&path)))?;
 
         Ok(Self {
             path,
-            entries: vec![],
+            entries: BTreeMap::new(),
             read_dir,
         })
     }
 
-    async fn next(&mut self) -> miette::Result<Option<DirEntry>> {
-        self.read_dir
-            .next_entry()
-            .await
-            .into_diagnostic()
-            .wrap_err_with(|| {
-                format!(
-                    "Failed to read from directory `{}`",
-                    display_path(&self.path)
-                )
-            })
-    }
-}
-
-impl TryInto<ServerGroup> for ReadFrame {
-    type Error = miette::Error;
-
-    fn try_into(self) -> Result<ServerGroup, Self::Error> {
-        Ok(ServerGroup {
-            name: Path::new(
-                self.path
-                    .file_name()
-                    .wrap_err("Failed to get basename of path")?,
+    async fn next(&mut self) -> color_eyre::Result<Option<DirEntry>> {
+        self.read_dir.next_entry().await.wrap_err_with(|| {
+            format!(
+                "Failed to read from directory `{}`",
+                display_path(&self.path)
             )
-            .to_path_buf()
-            .into_string()
-            .map_err(Error::NonUtf8Path)
-            .into_diagnostic()?,
-
-            children: self.entries,
-            expanded: false,
         })
     }
 }
 
-pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
-    let mut frames = vec![ReadFrame::try_new(dir.to_path_buf()).await?];
+impl From<ReadFrame> for ServerGroup {
+    fn from(val: ReadFrame) -> Self {
+        Self {
+            children: val.entries,
+            expanded: false,
+        }
+    }
+}
+
+pub async fn read(
+    root_dir: &Path,
+    online: HashSet<String>,
+) -> color_eyre::Result<BTreeMap<String, ServerEntry>> {
+    let mut frames = vec![ReadFrame::try_new(root_dir.to_path_buf()).await?];
+
+    println!("Online: {online:?}");
 
     loop {
         let frame = frames.last_mut().unwrap();
@@ -335,21 +300,34 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
             let base_name = Path::new(entry_path.file_name().wrap_err_with(|| {
                 format!(
                     "Failed to strip `{}` from `{}`",
-                    display_path(dir),
+                    display_path(root_dir),
                     display_path(&entry_path)
                 )
             })?)
             .to_path_buf()
             .into_string()
-            .map_err(Error::NonUtf8Path)
-            .into_diagnostic()?;
+            .map_err(Error::NonUtf8Path)?;
 
             if fs::try_exists(entry_path.join(metadata::DIRECTORY))
                 .await
-                .into_diagnostic()
                 .wrap_err("Failed to check if directory exists")?
             {
-                frame.entries.push(ServerEntry::object(base_name, false));
+                let entry_path = entry.path();
+                let relative_path = entry_path
+                    .strip_prefix(root_dir)
+                    .wrap_err("Failed to strip root dir from path")?
+                    .to_str()
+                    .wrap_err("Failed to convert path to string")?;
+
+                println!(
+                    "Relative path: {relative_path}, contained: {}",
+                    online.contains(relative_path)
+                );
+
+                frame.entries.insert(
+                    base_name,
+                    ServerEntry::object(online.contains(relative_path)),
+                );
             } else {
                 exhausted = false;
                 frames.push(ReadFrame::try_new(entry_path).await?);
@@ -361,12 +339,24 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
             continue;
         }
 
-        let mut frame = frames.pop().unwrap();
-
-        frame.entries.sort_unstable();
+        let Some(frame) = frames.pop() else {
+            bail!("Something went wrong")
+        };
 
         if let Some(parent) = frames.last_mut() {
-            parent.entries.push(ServerEntry::Group(frame.try_into()?));
+            let name = Path::new(
+                frame
+                    .path
+                    .file_name()
+                    .wrap_err("Failed to get basename of path")?,
+            )
+            .to_path_buf()
+            .into_string()
+            .map_err(Error::NonUtf8Path)?;
+
+            parent
+                .entries
+                .insert(name, ServerEntry::Group(frame.into()));
         } else {
             break Ok(frame.entries);
         }
@@ -377,14 +367,14 @@ pub async fn read(dir: &Path) -> miette::Result<Vec<ServerEntry>> {
 mod test {
     use std::path::PathBuf;
 
-    use crate::test_utils::{new_dir, tempdir_init_miette};
+    use crate::test_utils::{new_dir, tempdir_init_eyre};
 
     use super::*;
 
     async fn new_server(
         parent: &Path,
         name: impl AsRef<Path>,
-    ) -> miette::Result<(PathBuf, PathBuf)> {
+    ) -> color_eyre::Result<(PathBuf, PathBuf)> {
         let server_dir = new_dir(parent, name).await?;
         let metadata_dir = new_dir(&server_dir, metadata::DIRECTORY).await?;
 
@@ -392,8 +382,8 @@ mod test {
     }
 
     #[tokio::test]
-    async fn entries() -> miette::Result<()> {
-        let temp_dir = tempdir_init_miette()?;
+    async fn entries() -> color_eyre::Result<()> {
+        let temp_dir = tempdir_init_eyre()?;
         let servers_directory = temp_dir.path();
 
         for i in 0..2 {
@@ -413,11 +403,10 @@ mod test {
 
         let output = format!(
             "{}",
-            ServerGroup::new("root".to_string(), read(servers_directory).await?, false)
+            ServerGroup::new(read(servers_directory, HashSet::new()).await?, false)
         );
 
-        let expected = "\
-root
+        let expected = "
 ├──group-0
 │  ├──server-0-group0
 │  └──server-1-group0

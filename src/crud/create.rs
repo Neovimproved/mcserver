@@ -321,10 +321,10 @@ impl<R: SoftwareResolver> Creator<R> {
 
 #[cfg(test)]
 mod test {
-    use wiremock::{
-        Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
-    };
+    // use wiremock::{
+    //     Mock, MockServer, ResponseTemplate,
+    //     matchers::{method, path},
+    // };
 
     use crate::{
         crud::fabric::Fabric,

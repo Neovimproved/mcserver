@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt::Debug,
     future::{Pending, pending},
     mem,
@@ -37,7 +37,7 @@ use crate::{
     log,
     messages::{ClientMessage, CreateMessage, ServerMessage, display_bytes},
     read_message,
-    servers::{self, ServerEntry},
+    servers::{ReplicateExpansion, ServerEntry},
     write_message,
 };
 
@@ -95,15 +95,13 @@ impl App {
 
         log!("Pretty config: {config:#?}");
 
-        let servers = servers::read(config.servers_directory.as_ref()).await?;
-
         Ok(Self {
             config,
             document,
             config_file,
             mode: Mode::Selecting(SelectionState::Normal),
             server_list: ServerList {
-                servers,
+                servers: BTreeMap::new(),
                 selected: 0usize,
                 scroll: 0usize,
             },
@@ -122,7 +120,7 @@ impl App {
     }
 
     fn get_selected_mut(
-        entries: &mut [ServerEntry],
+        entries: &mut BTreeMap<String, ServerEntry>,
         selected: usize,
     ) -> Option<(&mut ServerEntry, String)> {
         let mut counter = 0;
@@ -133,7 +131,7 @@ impl App {
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
 
-            for entry in back_iter {
+            for (name, entry) in back_iter {
                 if selected == counter {
                     let mut path = qualifier.iter().fold(String::new(), |mut acc, item| {
                         acc.push_str(item);
@@ -141,7 +139,7 @@ impl App {
                         acc
                     });
 
-                    path.push_str(entry.name());
+                    path.push_str(name);
 
                     return Some((entry, path));
                 }
@@ -151,7 +149,7 @@ impl App {
                 if let ServerEntry::Group(server_group) = entry
                     && server_group.expanded
                 {
-                    qualifier.push(&server_group.name);
+                    qualifier.push(name);
                     iterators.push(server_group.children.iter_mut());
                     exhausted = false;
                     break;
@@ -167,7 +165,10 @@ impl App {
         None
     }
 
-    fn get_selected(entries: &[ServerEntry], selected: usize) -> Option<&ServerEntry> {
+    fn get_selected(
+        entries: &BTreeMap<String, ServerEntry>,
+        selected: usize,
+    ) -> Option<(&str, &ServerEntry)> {
         let mut counter = 0;
 
         let mut iterators = vec![entries.iter()];
@@ -176,9 +177,9 @@ impl App {
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
 
-            for entry in back_iter {
+            for (name, entry) in back_iter {
                 if selected == counter {
-                    return Some(entry);
+                    return Some((name, entry));
                 }
 
                 counter += 1;
@@ -186,7 +187,7 @@ impl App {
                 if let ServerEntry::Group(server_group) = entry
                     && server_group.expanded
                 {
-                    qualifier.push(&server_group.name);
+                    qualifier.push(name);
                     iterators.push(server_group.children.iter());
                     exhausted = false;
                     break;
@@ -211,13 +212,18 @@ impl App {
 
         match entry {
             ServerEntry::Group(server_group) => server_group.expanded = !server_group.expanded,
-            ServerEntry::Object(server_object) => {
-                write_message!(writer, ClientMessage::Attach { server: path })
-                    .await
-                    .into_diagnostic()
-                    .wrap_err("Failed to send message")?;
+            ServerEntry::Object(_server_object) => {
+                write_message!(
+                    writer,
+                    ClientMessage::Attach {
+                        server: path.clone()
+                    }
+                )
+                .await
+                .into_diagnostic()
+                .wrap_err("Failed to send message")?;
 
-                self.mode = Mode::output(self.server_list.selected, server_object.name.clone());
+                self.mode = Mode::output(self.server_list.selected, path);
             }
         }
 
@@ -281,10 +287,10 @@ impl App {
                     KeyCode::Char('a') => *selection_state = SelectionState::adding(),
 
                     KeyCode::Char('D') => {
-                        if let Some(entry) =
+                        if let Some((name, entry)) =
                             Self::get_selected(&self.server_list.servers, self.server_list.selected)
                         {
-                            *selection_state = SelectionState::deleting(entry);
+                            *selection_state = SelectionState::deleting(name, entry);
                         };
                     }
 
@@ -462,6 +468,8 @@ impl App {
             // Escaping output
             Mode::Console(console) if let ConnectionState::Escaping = console.state => {
                 match key.code {
+                    KeyCode::Enter => self.try_select(writer).await?,
+
                     KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
                     KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
 
@@ -536,7 +544,7 @@ impl App {
     }
 
     pub fn synchronize_servers(
-        children: &mut [ServerEntry],
+        children: &mut BTreeMap<String, ServerEntry>,
         online_servers: &HashSet<String>,
         path: Vec<String>,
     ) {
@@ -546,18 +554,18 @@ impl App {
             acc
         });
 
-        for entry in children {
+        for (name, entry) in children {
             match entry {
                 ServerEntry::Group(server_group) => {
                     let mut new_path = path.clone();
-                    new_path.push(server_group.name.clone());
+                    new_path.push(name.clone());
                     Self::synchronize_servers(&mut server_group.children, online_servers, new_path);
                 }
                 ServerEntry::Object(server_object) => {
-                    let name = format!("{joint}{}", server_object.name);
+                    let name = format!("{joint}{}", name);
                     if online_servers.contains(&name) {
                         server_object.online = true;
-                        log!("{}!!!", server_object.name);
+                        log!("{}!!!", name);
                     } else {
                         server_object.online = false;
                     }
@@ -617,9 +625,18 @@ impl App {
                     console.output.push(display_bytes(&bytes).to_string());
                 }
             }
-            ServerMessage::SynchronizationPayload { online_servers } => {
-                log!("Received payload: {online_servers:?}!");
+            ServerMessage::OnlineSynchronization(online_servers) => {
                 Self::synchronize_servers(&mut self.server_list.servers, &online_servers, vec![]);
+            }
+            ServerMessage::EntriesSynchronization(entries) => {
+                let mut updated = entries
+                    .deserialize()
+                    .into_diagnostic()
+                    .wrap_err("Failed to deserialize new server entries")?;
+
+                self.server_list.servers.replicate_expansion(&mut updated);
+
+                self.server_list.servers = updated;
             }
         }
 
@@ -642,6 +659,14 @@ impl App {
         };
 
         pin!(blink_event);
+
+        if let ServerMessage::EntriesSynchronization(entries) =
+            read_message!(reader).await.into_diagnostic()?
+        {
+            self.server_list.servers = entries.deserialize().into_diagnostic()?;
+        } else {
+            bail!("Didn't receive synchronization from server");
+        };
 
         let mut redraw = true;
 
@@ -729,28 +754,28 @@ impl App {
     }
 
     pub fn find_server_and_expand(
-        name: &str,
-        entries: &mut [ServerEntry],
+        target_name: &str,
+        entries: &mut BTreeMap<String, ServerEntry>,
         base_path: &str,
         mut base_counter: usize,
     ) -> Option<usize> {
-        for entry in entries {
+        for (name, entry) in entries {
             match entry {
                 ServerEntry::Group(server_group) => {
                     let group_entries = &mut server_group.children;
 
                     if let Some(pos) = Self::find_server_and_expand(
-                        name,
+                        target_name,
                         group_entries,
-                        &format!("{base_path}{}/", server_group.name),
+                        &format!("{base_path}{}/", name),
                         base_counter + 1,
                     ) {
                         server_group.expanded = true;
                         return Some(pos);
                     }
                 }
-                ServerEntry::Object(server_object) => {
-                    if name == format!("{base_path}{}", server_object.name) {
+                ServerEntry::Object(_server_object) => {
+                    if target_name == format!("{base_path}{}", name) {
                         return Some(base_counter);
                     }
                 }
@@ -916,10 +941,10 @@ impl App {
         self.mode = Mode::Selecting(SelectionState::Normal);
     }
 
-    fn count_len(entries: &[ServerEntry]) -> usize {
+    fn count_len(entries: &BTreeMap<String, ServerEntry>) -> usize {
         let mut len = 0;
 
-        for entry in entries {
+        for entry in entries.values() {
             match entry {
                 ServerEntry::Group(server_group) => {
                     if server_group.expanded {

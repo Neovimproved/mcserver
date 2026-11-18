@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ops::{self, Index, RangeBounds},
     time::{Duration, SystemTime},
 };
@@ -136,9 +137,9 @@ impl SelectionState {
         })
     }
 
-    pub fn deleting(entry: &ServerEntry) -> Self {
+    pub fn deleting(name: &str, entry: &ServerEntry) -> Self {
         Self::Deleting(DeleteState {
-            name: entry.name().to_string(),
+            name: name.to_string(),
             entry_type: entry.ty(),
             confirmation: "".to_string(),
             error_message: TempMessage::new(Duration::from_secs(2)),
@@ -187,7 +188,7 @@ impl Mode {
 }
 
 pub struct ServerList {
-    pub servers: Vec<ServerEntry>,
+    pub servers: BTreeMap<String, ServerEntry>,
     pub selected: usize,
     pub scroll: usize,
 }

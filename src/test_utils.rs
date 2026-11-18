@@ -26,12 +26,11 @@ pub fn tempdir_init_eyre() -> color_eyre::Result<TempDir> {
     tempfile::tempdir().wrap_err("Failed to create temporary directory")
 }
 
-pub async fn new_dir(parent: &Path, name: impl AsRef<Path>) -> miette::Result<PathBuf> {
+pub async fn new_dir(parent: &Path, name: impl AsRef<Path>) -> color_eyre::Result<PathBuf> {
     let dir = parent.join(name);
 
     fs::create_dir(&dir)
         .await
-        .into_diagnostic()
         .wrap_err_with(|| format!("Failed to create directory `{}`", display_path(&dir)))?;
 
     Ok(dir)

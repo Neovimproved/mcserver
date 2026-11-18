@@ -1,4 +1,8 @@
-use std::{borrow::Cow, collections::HashSet, fmt};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use bitcode::{Decode, Encode};
 use derive_more::Display;
@@ -6,6 +10,7 @@ use derive_more::Display;
 use crate::{
     crud::{ServerSoftwareType, Version},
     line_buffer::LineBuffer,
+    servers::ServerEntry,
 };
 
 pub const MAX_MESSAGE_LENGTH: usize = 1024 * 1024;
@@ -53,6 +58,20 @@ pub enum ServerInstruction {
 }
 
 #[derive(Clone, Debug, Decode, Display, Encode)]
+#[display("Encodable server entries (cannot be displayed as it has been serialized into binary)")]
+pub struct EncodableServerEntries(Vec<u8>);
+
+impl EncodableServerEntries {
+    pub fn serialize(value: &BTreeMap<String, ServerEntry>) -> Result<Self, bitcode::Error> {
+        bitcode::serialize(value).map(Self)
+    }
+
+    pub fn deserialize(&self) -> Result<BTreeMap<String, ServerEntry>, bitcode::Error> {
+        bitcode::deserialize(&self.0)
+    }
+}
+
+#[derive(Clone, Debug, Decode, Display, Encode)]
 pub enum ServerMessage {
     #[display("A server has already started")]
     AlreadyStarted,
@@ -79,16 +98,30 @@ pub enum ServerMessage {
     #[display("Output from the server: {}", display_bytes(_0))]
     Output(Vec<u8>),
 
-    #[display("Online servers: ({})", online_servers.iter().enumerate().fold(String::new(), |mut acc, (idx, server)| {
-        acc.push_str(server);
+    #[display("{}", OnlineServersView(_0))]
+    OnlineSynchronization(HashSet<String>),
 
-        if idx != online_servers.len() - 1 {
-            acc.push_str(", ");
+    EntriesSynchronization(EncodableServerEntries),
+}
+
+struct OnlineServersView<'a>(&'a HashSet<String>);
+
+impl<'a> fmt::Display for OnlineServersView<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Online servers: ()")?;
+
+        for (idx, server) in self.0.iter().enumerate() {
+            write!(f, "{server}")?;
+
+            if idx != self.0.len() - 1 {
+                write!(f, ", ")?;
+            }
         }
 
-        acc
-    }))]
-    SynchronizationPayload { online_servers: HashSet<String> },
+        write!(f, ")")?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Decode, Encode)]

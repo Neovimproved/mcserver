@@ -60,16 +60,18 @@ impl Server {
         }
     }
 
-    pub fn synchronize_clients(&mut self) {
-        let payload = ServerMessage::SynchronizationPayload {
-            online_servers: self
-                .server_communicators
+    fn synchronize_clients(&self) {
+        let payload = ServerMessage::OnlineSynchronization(
+            self.server_communicators
                 .iter()
                 .map(|pair| pair.key().clone())
                 .collect(),
-        };
+        );
 
-        let _ = self.sender.send(bitcode::encode(&payload));
+        let _ = self
+            .sender
+            .send(bitcode::encode(&payload))
+            .wrap_err("Failed to synchronize");
     }
 
     async fn get_additional_args(&self) -> Result<Vec<String>> {
@@ -232,9 +234,17 @@ async fn server_lifecycle(
         println!("Server {} closed", server.name);
     }
 
-    metadata::update_last_used(metadata::dir(&server.name))
-        .await
-        .wrap_err("Failed to update metadata")?;
+    metadata::update_last_used(metadata::dir(
+        server
+            .config
+            .read()
+            .await
+            .servers_directory
+            .path
+            .join(&server.name),
+    ))
+    .await
+    .wrap_err("Failed to update metadata")?;
 
     Ok(())
 }

@@ -1,4 +1,7 @@
-use std::fs::{self, File};
+use std::{
+    collections::HashSet,
+    fs::{self, File},
+};
 
 use clap::Parser;
 use color_eyre::eyre::Context as EyreContext;
@@ -83,13 +86,16 @@ fn tree() -> miette::Result<()> {
             .0
             .servers_directory;
 
-        let entries = servers::read(&servers_directory.path)
+        // TODO: get online servers here
+        let entries = servers::read(&servers_directory.path, HashSet::new())
             .await
-            .wrap_err("Failed to read server entries")?;
+            .wrap_err("Failed to read server entries")
+            .map_err(miette::Report::msg)?;
 
         println!(
-            "{:#}",
-            ServerGroup::new(servers_directory.value, entries, true)
+            "{}\n{:#}",
+            servers_directory.value,
+            ServerGroup::new(entries, true)
         );
 
         Ok(())

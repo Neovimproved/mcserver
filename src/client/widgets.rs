@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, collections::BTreeMap};
 
 use ratatui::{
     buffer::Buffer,
@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub struct ServersList<'a> {
-    entries: &'a [ServerEntry],
+    entries: &'a BTreeMap<String, ServerEntry>,
     attached: Option<usize>,
     selected: usize,
     scroll: usize,
@@ -29,7 +29,7 @@ const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
 
 impl<'a> ServersList<'a> {
     pub fn new(
-        entries: &'a [ServerEntry],
+        entries: &'a BTreeMap<String, ServerEntry>,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
         Self {
@@ -57,7 +57,7 @@ impl<'a> ServersList<'a> {
     }
 
     fn accumulate(
-        entries: &'a [ServerEntry],
+        entries: &'a BTreeMap<String, ServerEntry>,
         accumulator: &mut Vec<Line<'a>>,
         base_indentation: &str,
         counter: &mut usize,
@@ -65,7 +65,7 @@ impl<'a> ServersList<'a> {
         selected: usize,
         ti_cfg: &'a TerminalInterfaceConfig,
     ) {
-        for (idx, entry) in entries.iter().enumerate() {
+        for (idx, (name, entry)) in entries.iter().enumerate() {
             const CONTINUATION: &str = "├╴";
             const END: &str = "└╴";
 
@@ -98,7 +98,7 @@ impl<'a> ServersList<'a> {
 
             match entry {
                 ServerEntry::Group(server_group) => {
-                    let line = server_group.fold_to_line(spans, is_selected, ti_cfg);
+                    let line = server_group.fold_to_line(name, spans, is_selected, ti_cfg);
 
                     accumulator.push(line);
                     *counter += 1;
@@ -118,6 +118,7 @@ impl<'a> ServersList<'a> {
 
                 ServerEntry::Object(server_object) => {
                     let line = server_object.fold_to_line(
+                        name,
                         spans,
                         attached == Some(*counter),
                         is_selected,

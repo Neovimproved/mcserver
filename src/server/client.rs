@@ -10,13 +10,15 @@ use crate::{
     config::Config,
     crud, error,
     line_buffer::LineBuffer,
-    messages::{ClientMessage, MAX_MESSAGE_LENGTH, ServerInstruction, ServerMessage},
+    messages::{
+        ClientMessage, EncodableServerEntries, MAX_MESSAGE_LENGTH, ServerInstruction, ServerMessage,
+    },
     read_message,
     server::{
         runtime::initialize_server,
         types::{Request, ServerCommunicator},
     },
-    write_bytes, write_message,
+    servers, write_bytes, write_message,
 };
 
 enum ServeAction {
@@ -50,17 +52,20 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     // TODO: synchronize here
-    async fn synchronize_and_send(&mut self) -> Result<()> {
-        let message = ServerMessage::SynchronizationPayload {
-            online_servers: self
-                .server_communicators
-                .iter()
-                .map(|pair| pair.key().clone())
-                .collect(),
-        };
+    async fn send_synchronization(&mut self) -> Result<()> {
+        let entries = EncodableServerEntries::serialize(
+            &servers::read(
+                &self.config.read().await.servers_directory.path,
+                self.server_communicators
+                    .iter()
+                    .map(|pair| pair.key().clone())
+                    .collect(),
+            )
+            .await?,
+        )?;
 
         let writer = &mut self.writer;
-        write_message!(writer, message)
+        write_message!(writer, ServerMessage::EntriesSynchronization(entries))
             .await
             .wrap_err("Failed to send synchronization payload to client")
     }
@@ -90,7 +95,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
 
                 ClientMessage::Delete { server } => crud::delete(self.config, server).await?,
 
-                ClientMessage::SynchronizationRequest => self.synchronize_and_send().await?,
+                ClientMessage::SynchronizationRequest => self.send_synchronization().await?,
 
                 _ => {
                     let writer = &mut self.writer;
@@ -133,7 +138,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
             ClientMessage::ProgramInput(bytes) => message_sender
                 .send(ServerInstruction::SendInput(bytes))
                 .wrap_err("Failed to send input instruction")?,
-            ClientMessage::SynchronizationRequest => self.synchronize_and_send().await?,
+            ClientMessage::SynchronizationRequest => self.send_synchronization().await?,
         }
 
         Ok(action)
@@ -206,7 +211,7 @@ impl<R: AsyncReadExt + Unpin, W: AsyncWriteExt + Unpin> Client<R, W> {
     }
 
     pub async fn serve(&mut self) -> Result<()> {
-        self.synchronize_and_send().await?;
+        self.send_synchronization().await?;
 
         loop {
             match &self.action {
