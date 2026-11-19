@@ -26,8 +26,8 @@ pub struct ServersList<'a> {
     attached: Option<usize>,
     selected: usize,
     scroll: usize,
-    terminal_interface_config: &'a TerminalInterfaceConfig,
     bump: &'a Bump,
+    terminal_interface_config: &'a TerminalInterfaceConfig,
 }
 
 struct BorrowedAccumulationValues<'a> {
@@ -47,8 +47,8 @@ impl<'a> ServersList<'a> {
             attached: None,
             selected: 0,
             scroll: 0,
-            terminal_interface_config,
             bump,
+            terminal_interface_config,
         }
     }
 

@@ -47,9 +47,9 @@ const CONSOLE_CURSOR_CHAR: char = '█';
 const POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT: u16 = 90;
 
 pub struct App {
-    bump: Bump,
     config: Config,
     document: KdlDocument,
+    bump: Bump,
     config_file: PathBuf,
     mode: Mode,
     server_list: ServerList,
@@ -96,12 +96,10 @@ impl App {
             .into_diagnostic()
             .wrap_err("Failed to create/read config")?;
 
-        log!("Pretty config: {config:#?}");
-
         Ok(Self {
-            bump: Bump::new(),
             config,
             document,
+            bump: Bump::new(),
             config_file,
             mode: Mode::Selecting(SelectionState::Normal),
             server_list: ServerList {
@@ -267,8 +265,43 @@ impl App {
             // for debugging things
             #[cfg(debug_assertions)]
             KeyCode::Char('d') => {
-                log_less_whitespace(&self.server_list.servers, |n| n / 2);
-                log!("Position: {}", self.server_list.selected);
+                use crossterm::event;
+
+                log!("Debug thing");
+
+                let event = event::read()
+                    .into_diagnostic()
+                    .wrap_err("Failed to read next event")?;
+
+                let Event::Key(key) = event else {
+                    log!("Non-key event received");
+                    return Ok(());
+                };
+
+                let KeyCode::Char(ch) = key.code else {
+                    log!("Non-char key event received");
+                    return Ok(());
+                };
+
+                match ch {
+                    // config
+                    'c' => {
+                        log_less_whitespace(&self.config, |x| x / 2);
+                    }
+                    // allocated
+                    'a' => {
+                        log!("Allocated: {}", self.bump.allocated_bytes());
+                    }
+                    // position
+                    'p' => {
+                        log!("Position: {}", self.server_list.selected);
+                    }
+                    // server list
+                    's' => {
+                        log_less_whitespace(&self.server_list.servers, |x| x / 2);
+                    }
+                    _ => {}
+                }
             }
 
             KeyCode::Char('q') => self.exit(),
@@ -302,13 +335,6 @@ impl App {
                         ) {
                             *selection_state = SelectionState::deleting(name, entry);
                         };
-                    }
-
-                    // for debugging things
-                    #[cfg(debug_assertions)]
-                    KeyCode::Char('d') => {
-                        log_less_whitespace(&self.server_list.servers, |n| n / 2);
-                        log!("Position: {}", self.server_list.selected);
                     }
 
                     KeyCode::Char('s') => {
