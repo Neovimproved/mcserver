@@ -109,7 +109,11 @@ impl<'a> ServersList<'a> {
                         Self::accumulate(
                             &server_group.children,
                             accumulator,
-                            &format!("{base_indentation}│   "),
+                            &if is_last {
+                                format!("{base_indentation}    ")
+                            } else {
+                                format!("{base_indentation}│   ")
+                            },
                             counter,
                             attached,
                             selected,
