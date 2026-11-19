@@ -9,7 +9,7 @@ repository = "https://github.com/Neovimproved/mcserver"
 [dependencies]
 bitcode = { version = "0.6.9", features = ["serde", "derive"] }
 bumpalo = { version = "3.20.4", features = ["collections"] }
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 color-eyre = "0.6.5"
 const_format = "0.2.37"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
