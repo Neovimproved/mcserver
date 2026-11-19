@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::HashSet,
     fmt::{self, Display},
     path::{Path, PathBuf},
@@ -22,10 +23,27 @@ use crate::{
 
 const SERVER_GROUP_ANSI_COLOR: u8 = 34;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub enum ServerEntry {
     Group(ServerGroup),
     Object(ServerObject),
+}
+
+impl Ord for ServerEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (ServerEntry::Group(_), ServerEntry::Group(_)) => Ordering::Equal,
+            (ServerEntry::Group(_), ServerEntry::Object(_)) => Ordering::Less,
+            (ServerEntry::Object(_), ServerEntry::Group(_)) => Ordering::Greater,
+            (ServerEntry::Object(_), ServerEntry::Object(_)) => Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for ServerEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl ServerEntry {
@@ -43,11 +61,17 @@ impl ServerEntry {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct ServerGroup {
     pub children: IndexMap<String, ServerEntry>,
     #[serde(skip)]
     pub expanded: bool,
+}
+
+impl PartialOrd for ServerGroup {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.expanded.partial_cmp(&other.expanded)
+    }
 }
 
 impl ServerGroup {
@@ -112,7 +136,7 @@ impl Display for ServerGroup {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq, PartialOrd)]
 pub struct ServerObject {
     pub online: bool,
 }
@@ -342,7 +366,9 @@ pub async fn read(
             bail!("Something went wrong")
         };
 
-        frame.entries.sort_unstable_keys();
+        frame
+            .entries
+            .sort_unstable_by(|k1, v1, k2, v2| v1.cmp(v2).then(k1.cmp(k2)));
 
         if let Some(parent) = frames.last_mut() {
             let name = Path::new(
