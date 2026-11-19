@@ -17,7 +17,7 @@ use tokio::fs::{self, DirEntry, ReadDir};
 use crate::{
     config::TerminalInterfaceConfig,
     error::{Error, display_path},
-    log, metadata,
+    metadata,
 };
 
 const SERVER_GROUP_ANSI_COLOR: u8 = 34;
