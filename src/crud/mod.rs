@@ -5,6 +5,7 @@ mod version;
 
 mod fabric;
 mod paper;
+mod vanilla;
 
 use std::str::FromStr;
 

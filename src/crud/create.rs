@@ -6,13 +6,11 @@ use tokio::{fs, sync::RwLock};
 
 use crate::{
     config::Config,
-    crud::{ServerSoftwareType, Version, base_url, fabric::Fabric, paper::Paper},
+    crud::{ServerSoftwareType, Version, base_url, fabric::Fabric, paper::Paper, vanilla::Vanilla},
     error::{self, display_path},
     messages::CreateMessage,
     metadata,
 };
-
-static _BASE_VANILLA_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
 pub trait ServerSoftware<T> {
     const NAME: &str;
@@ -108,7 +106,11 @@ impl SoftwareResolver for DefaultSoftwareResolver {
                     .await
             }
             ServerSoftwareType::Purpur => todo!(),
-            ServerSoftwareType::Vanilla => todo!(),
+            ServerSoftwareType::Vanilla => {
+                Vanilla::from(base_url::VANILLA)
+                    .create_jar(version, server_dir)
+                    .await
+            }
         }
     }
 }
