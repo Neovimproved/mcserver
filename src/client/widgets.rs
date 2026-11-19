@@ -1,5 +1,6 @@
-use std::{borrow::Cow, collections::BTreeMap};
+use std::borrow::Cow;
 
+use indexmap::IndexMap;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -15,7 +16,7 @@ use crate::{
 };
 
 pub struct ServersList<'a> {
-    entries: &'a BTreeMap<String, ServerEntry>,
+    entries: &'a IndexMap<String, ServerEntry>,
     attached: Option<usize>,
     selected: usize,
     scroll: usize,
@@ -29,7 +30,7 @@ const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
 
 impl<'a> ServersList<'a> {
     pub fn new(
-        entries: &'a BTreeMap<String, ServerEntry>,
+        entries: &'a IndexMap<String, ServerEntry>,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
         Self {
@@ -57,7 +58,7 @@ impl<'a> ServersList<'a> {
     }
 
     fn accumulate(
-        entries: &'a BTreeMap<String, ServerEntry>,
+        entries: &'a IndexMap<String, ServerEntry>,
         accumulator: &mut Vec<Line<'a>>,
         base_indentation: &str,
         counter: &mut usize,
@@ -70,8 +71,9 @@ impl<'a> ServersList<'a> {
             const END: &str = "└╴";
 
             let is_selected = selected == *counter;
+            let is_last = idx == entries.len() - 1;
 
-            let spans = match (is_selected, idx == entries.len() - 1) {
+            let spans = match (is_selected, is_last) {
                 (true, last) => {
                     let trimmed_indentation = if let Some(ch) = base_indentation.chars().next() {
                         format!(

@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeMap,
     ops::{self, Index, RangeBounds},
     time::{Duration, SystemTime},
 };
 
+use indexmap::IndexMap;
 use ratatui::layout::Rect;
 
 use crate::{
@@ -188,7 +188,7 @@ impl Mode {
 }
 
 pub struct ServerList {
-    pub servers: BTreeMap<String, ServerEntry>,
+    pub servers: IndexMap<String, ServerEntry>,
     pub selected: usize,
     pub scroll: usize,
 }

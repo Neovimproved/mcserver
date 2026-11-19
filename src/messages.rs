@@ -1,11 +1,8 @@
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashSet},
-    fmt,
-};
+use std::{borrow::Cow, collections::HashSet, fmt};
 
 use bitcode::{Decode, Encode};
 use derive_more::Display;
+use indexmap::IndexMap;
 
 use crate::{
     crud::{ServerSoftwareType, Version},
@@ -62,11 +59,11 @@ pub enum ServerInstruction {
 pub struct EncodableServerEntries(Vec<u8>);
 
 impl EncodableServerEntries {
-    pub fn serialize(value: &BTreeMap<String, ServerEntry>) -> Result<Self, bitcode::Error> {
+    pub fn serialize(value: &IndexMap<String, ServerEntry>) -> Result<Self, bitcode::Error> {
         bitcode::serialize(value).map(Self)
     }
 
-    pub fn deserialize(&self) -> Result<BTreeMap<String, ServerEntry>, bitcode::Error> {
+    pub fn deserialize(&self) -> Result<IndexMap<String, ServerEntry>, bitcode::Error> {
         bitcode::deserialize(&self.0)
     }
 }

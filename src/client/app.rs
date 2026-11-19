@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     fmt::Debug,
     future::{Pending, pending},
     mem,
@@ -10,6 +10,7 @@ use std::{
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
+use indexmap::IndexMap;
 use kdl::KdlDocument;
 use miette::{Context, IntoDiagnostic, bail};
 use ratatui::{
@@ -101,7 +102,7 @@ impl App {
             config_file,
             mode: Mode::Selecting(SelectionState::Normal),
             server_list: ServerList {
-                servers: BTreeMap::new(),
+                servers: IndexMap::new(),
                 selected: 0usize,
                 scroll: 0usize,
             },
@@ -120,7 +121,7 @@ impl App {
     }
 
     fn get_selected_mut(
-        entries: &mut BTreeMap<String, ServerEntry>,
+        entries: &mut IndexMap<String, ServerEntry>,
         selected: usize,
     ) -> Option<(&mut ServerEntry, String)> {
         let mut counter = 0;
@@ -166,7 +167,7 @@ impl App {
     }
 
     fn get_selected(
-        entries: &BTreeMap<String, ServerEntry>,
+        entries: &IndexMap<String, ServerEntry>,
         selected: usize,
     ) -> Option<(&str, &ServerEntry)> {
         let mut counter = 0;
@@ -544,7 +545,7 @@ impl App {
     }
 
     pub fn synchronize_servers(
-        children: &mut BTreeMap<String, ServerEntry>,
+        children: &mut IndexMap<String, ServerEntry>,
         online_servers: &HashSet<String>,
         path: Vec<String>,
     ) {
@@ -757,7 +758,7 @@ impl App {
 
     pub fn find_server_and_expand(
         target_name: &str,
-        entries: &mut BTreeMap<String, ServerEntry>,
+        entries: &mut IndexMap<String, ServerEntry>,
         base_path: &str,
         mut base_counter: usize,
     ) -> Option<usize> {
@@ -943,7 +944,7 @@ impl App {
         self.mode = Mode::Selecting(SelectionState::Normal);
     }
 
-    fn count_len(entries: &BTreeMap<String, ServerEntry>) -> usize {
+    fn count_len(entries: &IndexMap<String, ServerEntry>) -> usize {
         let mut len = 0;
 
         for entry in entries.values() {

@@ -1,11 +1,12 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::HashSet,
     fmt::{self, Display},
     path::{Path, PathBuf},
 };
 
 use color_eyre::eyre::{Context, ContextCompat, bail};
 use derive_more::Display;
+use indexmap::IndexMap;
 use ratatui::{
     style::Stylize,
     text::{Line, Span},
@@ -16,7 +17,7 @@ use tokio::fs::{self, DirEntry, ReadDir};
 use crate::{
     config::TerminalInterfaceConfig,
     error::{Error, display_path},
-    metadata,
+    log, metadata,
 };
 
 const SERVER_GROUP_ANSI_COLOR: u8 = 34;
@@ -44,13 +45,13 @@ impl ServerEntry {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ServerGroup {
-    pub children: BTreeMap<String, ServerEntry>,
+    pub children: IndexMap<String, ServerEntry>,
     #[serde(skip)]
     pub expanded: bool,
 }
 
 impl ServerGroup {
-    pub fn new(children: BTreeMap<String, ServerEntry>, expanded: bool) -> Self {
+    pub fn new(children: IndexMap<String, ServerEntry>, expanded: bool) -> Self {
         Self { children, expanded }
     }
 
@@ -163,7 +164,7 @@ pub trait ReplicateExpansion {
     fn replicate_expansion_to(&self, other: &mut Self);
 }
 
-impl ReplicateExpansion for BTreeMap<String, ServerEntry> {
+impl ReplicateExpansion for IndexMap<String, ServerEntry> {
     fn replicate_expansion_to(&self, other: &mut Self) {
         for (name, entry) in self {
             if let ServerEntry::Group(server_group) = entry
@@ -179,7 +180,7 @@ impl ReplicateExpansion for BTreeMap<String, ServerEntry> {
 }
 
 pub fn display_entries(
-    entries: &BTreeMap<String, ServerEntry>,
+    entries: &IndexMap<String, ServerEntry>,
     f: &mut fmt::Formatter,
     base_indentation: &str,
     indentation_width: usize,
@@ -188,7 +189,7 @@ pub fn display_entries(
     for (idx, (name, entry)) in entries.iter().enumerate() {
         match entry {
             ServerEntry::Group(server_group) => {
-                if idx == entries.len().saturating_sub(1) {
+                if idx == entries.len() - 1 {
                     write!(f, "\n{base_indentation}└──")?;
 
                     if ansi_colors {
@@ -227,7 +228,7 @@ pub fn display_entries(
             }
             // TODO: show if online
             ServerEntry::Object(_server_object) => {
-                if idx == entries.len().saturating_sub(1) {
+                if idx == entries.len() - 1 {
                     write!(f, "\n{base_indentation}└──")?;
                 } else {
                     write!(f, "\n{base_indentation}├──")?;
@@ -249,7 +250,7 @@ pub fn display_entries(
 
 struct ReadFrame {
     path: PathBuf,
-    entries: BTreeMap<String, ServerEntry>,
+    entries: IndexMap<String, ServerEntry>,
     read_dir: ReadDir,
 }
 
@@ -261,7 +262,7 @@ impl ReadFrame {
 
         Ok(Self {
             path,
-            entries: BTreeMap::new(),
+            entries: IndexMap::new(),
             read_dir,
         })
     }
@@ -288,7 +289,7 @@ impl From<ReadFrame> for ServerGroup {
 pub async fn read(
     root_dir: &Path,
     online: HashSet<String>,
-) -> color_eyre::Result<BTreeMap<String, ServerEntry>> {
+) -> color_eyre::Result<IndexMap<String, ServerEntry>> {
     let mut frames = vec![ReadFrame::try_new(root_dir.to_path_buf()).await?];
 
     println!("Online: {online:?}");
@@ -322,11 +323,6 @@ pub async fn read(
                     .to_str()
                     .wrap_err("Failed to convert path to string")?;
 
-                println!(
-                    "Relative path: {relative_path}, contained: {}",
-                    online.contains(relative_path)
-                );
-
                 frame.entries.insert(
                     base_name,
                     ServerEntry::object(online.contains(relative_path)),
@@ -342,9 +338,11 @@ pub async fn read(
             continue;
         }
 
-        let Some(frame) = frames.pop() else {
+        let Some(mut frame) = frames.pop() else {
             bail!("Something went wrong")
         };
+
+        frame.entries.sort_unstable_keys();
 
         if let Some(parent) = frames.last_mut() {
             let name = Path::new(
