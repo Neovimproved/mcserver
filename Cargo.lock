@@ -1647,6 +1647,7 @@ name = "mcserver"
 version = "0.4.0"
 dependencies = [
  "bitcode",
+ "bumpalo",
  "clap",
  "color-eyre",
  "const_format",

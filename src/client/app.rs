@@ -8,6 +8,7 @@ use std::{
     str::FromStr,
 };
 
+use bumpalo::{Bump, collections::Vec};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::{StreamExt, future::Either};
 use indexmap::IndexMap;
@@ -46,6 +47,7 @@ const CONSOLE_CURSOR_CHAR: char = '█';
 const POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT: u16 = 90;
 
 pub struct App {
+    bump: Bump,
     config: Config,
     document: KdlDocument,
     config_file: PathBuf,
@@ -97,6 +99,7 @@ impl App {
         log!("Pretty config: {config:#?}");
 
         Ok(Self {
+            bump: Bump::new(),
             config,
             document,
             config_file,
@@ -120,14 +123,15 @@ impl App {
         self.config.ti()
     }
 
-    fn get_selected_mut(
-        entries: &mut IndexMap<String, ServerEntry>,
+    fn get_selected_qualified_mut<'a>(
+        bump: &Bump,
+        entries: &'a mut IndexMap<String, ServerEntry>,
         selected: usize,
-    ) -> Option<(&mut ServerEntry, String)> {
+    ) -> Option<(&'a mut ServerEntry, String)> {
         let mut counter = 0;
 
-        let mut iterators = vec![entries.iter_mut()];
-        let mut qualifier: Vec<&str> = vec![];
+        let mut iterators = bumpalo::vec![in bump; entries.iter_mut()];
+        let mut qualifier = Vec::<&str>::new_in(bump);
 
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
@@ -166,14 +170,15 @@ impl App {
         None
     }
 
-    fn get_selected(
-        entries: &IndexMap<String, ServerEntry>,
+    fn get_selected<'a>(
+        bump: &Bump,
+        entries: &'a IndexMap<String, ServerEntry>,
         selected: usize,
-    ) -> Option<(&str, &ServerEntry)> {
+    ) -> Option<(&'a str, &'a ServerEntry)> {
         let mut counter = 0;
 
-        let mut iterators = vec![entries.iter()];
-        let mut qualifier: Vec<&str> = vec![];
+        let mut iterators = bumpalo::vec![in bump; entries.iter()];
+        let mut qualifier = Vec::<&str>::new_in(bump);
 
         while let Some(back_iter) = iterators.last_mut() {
             let mut exhausted = true;
@@ -205,9 +210,11 @@ impl App {
     }
 
     async fn try_select(&mut self, mut writer: impl AsyncWriteExt + Unpin) -> miette::Result<()> {
-        let Some((entry, path)) =
-            Self::get_selected_mut(&mut self.server_list.servers, self.server_list.selected)
-        else {
+        let Some((entry, path)) = Self::get_selected_qualified_mut(
+            &self.bump,
+            &mut self.server_list.servers,
+            self.server_list.selected,
+        ) else {
             bail!("Failed to find entry {}", self.server_list.selected);
         };
 
@@ -288,9 +295,11 @@ impl App {
                     KeyCode::Char('a') => *selection_state = SelectionState::adding(),
 
                     KeyCode::Char('D') => {
-                        if let Some((name, entry)) =
-                            Self::get_selected(&self.server_list.servers, self.server_list.selected)
-                        {
+                        if let Some((name, entry)) = Self::get_selected(
+                            &self.bump,
+                            &self.server_list.servers,
+                            self.server_list.selected,
+                        ) {
                             *selection_state = SelectionState::deleting(name, entry);
                         };
                     }
@@ -545,11 +554,14 @@ impl App {
     }
 
     pub fn synchronize_servers(
+        bump: &Bump,
         children: &mut IndexMap<String, ServerEntry>,
         online_servers: &HashSet<String>,
         path: Vec<String>,
     ) {
-        let joint = path.iter().fold(String::new(), |mut acc, item| {
+        use bumpalo::collections::String;
+
+        let joint = path.iter().fold(String::new_in(bump), |mut acc, item| {
             acc.push_str(item);
             acc.push('/');
             acc
@@ -560,11 +572,16 @@ impl App {
                 ServerEntry::Group(server_group) => {
                     let mut new_path = path.clone();
                     new_path.push(name.clone());
-                    Self::synchronize_servers(&mut server_group.children, online_servers, new_path);
+                    Self::synchronize_servers(
+                        bump,
+                        &mut server_group.children,
+                        online_servers,
+                        new_path,
+                    );
                 }
                 ServerEntry::Object(server_object) => {
-                    let name = format!("{joint}{}", name);
-                    if online_servers.contains(&name) {
+                    let name = bumpalo::format!(in bump, "{joint}{}", name);
+                    if online_servers.contains(name.as_str()) {
                         server_object.online = true;
                         log!("{}!!!", name);
                     } else {
@@ -627,7 +644,12 @@ impl App {
                 }
             }
             ServerMessage::OnlineSynchronization(online_servers) => {
-                Self::synchronize_servers(&mut self.server_list.servers, &online_servers, vec![]);
+                Self::synchronize_servers(
+                    &self.bump,
+                    &mut self.server_list.servers,
+                    &online_servers,
+                    Vec::new_in(&self.bump),
+                );
             }
             ServerMessage::EntriesSynchronization(entries) => {
                 let mut updated = entries
@@ -679,6 +701,8 @@ impl App {
             .wrap_err("Failed to create config directory event stream")?;
 
         loop {
+            self.bump.reset();
+
             if self.exiting {
                 writer
                     .shutdown()
@@ -757,6 +781,7 @@ impl App {
     }
 
     pub fn find_server_and_expand(
+        bump: &Bump,
         target_name: &str,
         entries: &mut IndexMap<String, ServerEntry>,
         base_path: &str,
@@ -768,9 +793,10 @@ impl App {
                     let group_entries = &mut server_group.children;
 
                     if let Some(pos) = Self::find_server_and_expand(
+                        bump,
                         target_name,
                         group_entries,
-                        &format!("{base_path}{}/", name),
+                        &bumpalo::format!(in bump, "{base_path}{}/", name),
                         base_counter + 1,
                     ) {
                         server_group.expanded = true;
@@ -778,7 +804,7 @@ impl App {
                     }
                 }
                 ServerEntry::Object(_server_object) => {
-                    if target_name == format!("{base_path}{}", name) {
+                    if target_name == bumpalo::format!(in bump, "{base_path}{}", name) {
                         return Some(base_counter);
                     }
                 }
@@ -797,8 +823,14 @@ impl App {
         name: Option<String>,
     ) -> miette::Result<()> {
         if let Some(name) = name {
-            let pos = Self::find_server_and_expand(&name, &mut self.server_list.servers, "", 0)
-                .wrap_err_with(|| format!("{name} could not be found"))?;
+            let pos = Self::find_server_and_expand(
+                &self.bump,
+                &name,
+                &mut self.server_list.servers,
+                "",
+                0,
+            )
+            .wrap_err_with(|| format!("{name} could not be found"))?;
 
             self.server_list.selected = pos;
 
@@ -869,7 +901,7 @@ impl App {
         match &self.mode {
             Mode::Selecting(selection_state) => {
                 frame.render_widget(
-                    ServersList::new(&self.server_list.servers, self.ti_cfg())
+                    ServersList::new(&self.bump, &self.server_list.servers, self.ti_cfg())
                         .selected(self.server_list.selected)
                         .scroll(self.server_list.scroll),
                     frame_area,
@@ -903,7 +935,8 @@ impl App {
                             POPUP_MANAGEMENT_WIDGET_WIDTH_PERCENT,
                         ))[1];
 
-                        let delete_widget = Delete::new(delete_state, self.blinking, self.ti_cfg());
+                        let delete_widget =
+                            Delete::new(delete_state, self.blinking, &self.bump, self.ti_cfg());
 
                         frame.render_widget(Clear, area);
                         frame.render_widget(delete_widget, area);
@@ -918,7 +951,7 @@ impl App {
                             .split(frame.area());
 
                     frame.render_widget(
-                        ServersList::new(&self.server_list.servers, self.ti_cfg())
+                        ServersList::new(&self.bump, &self.server_list.servers, self.ti_cfg())
                             .attached(console.attached_server)
                             .selected(self.server_list.selected)
                             .scroll(self.server_list.scroll),

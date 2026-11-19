@@ -77,7 +77,7 @@ impl ServerGroup {
     pub fn fold_to_line<'a>(
         &'a self,
         name: &'a str,
-        mut spans: Vec<Span<'a>>,
+        mut spans: bumpalo::collections::Vec<Span<'a>>,
         is_selected: bool,
         ti_cfg: &'a TerminalInterfaceConfig,
     ) -> Line<'a> {
@@ -99,9 +99,9 @@ impl ServerGroup {
         spans.push(Span::from(name));
 
         if is_selected {
-            Line::from(spans).bg(ti_cfg.selected_color)
+            Line::from(spans.into_bump_slice()).bg(ti_cfg.selected_color)
         } else {
-            Line::from(spans)
+            Line::from(spans.into_bump_slice())
         }
     }
 }
@@ -121,7 +121,7 @@ impl ServerObject {
     pub fn fold_to_line<'a>(
         &'a self,
         name: &'a str,
-        mut spans: Vec<Span<'a>>,
+        mut spans: bumpalo::collections::Vec<Span<'a>>,
         is_attached: bool,
         is_selected: bool,
         ti_cfg: &'a TerminalInterfaceConfig,
@@ -145,9 +145,9 @@ impl ServerObject {
         });
 
         if is_selected {
-            Line::from(spans).bg(ti_cfg.selected_color)
+            Line::from(spans.into_bump_slice()).bg(ti_cfg.selected_color)
         } else {
-            Line::from(spans)
+            Line::from(spans.into_bump_slice())
         }
     }
 }

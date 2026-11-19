@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use bumpalo::{Bump, collections::CollectIn};
 use indexmap::IndexMap;
 use ratatui::{
     buffer::Buffer,
@@ -15,21 +16,29 @@ use crate::{
     servers::ServerEntry,
 };
 
+const DEFAULT_NAME_INPUT: &str = "Unnamed";
+
+const DEFAULT_VERSION_INPUT: &str = "Latest";
+const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
+
 pub struct ServersList<'a> {
     entries: &'a IndexMap<String, ServerEntry>,
     attached: Option<usize>,
     selected: usize,
     scroll: usize,
     terminal_interface_config: &'a TerminalInterfaceConfig,
+    bump: &'a Bump,
 }
 
-const DEFAULT_NAME_INPUT: &str = "Unnamed";
-
-const DEFAULT_VERSION_INPUT: &str = "Latest";
-const DEFAULT_SOFTWARE_INPUT: &str = "Vanilla";
+struct BorrowedAccumulationValues<'a> {
+    bump: &'a Bump,
+    entries: &'a IndexMap<String, ServerEntry>,
+    terminal_interface_config: &'a TerminalInterfaceConfig,
+}
 
 impl<'a> ServersList<'a> {
     pub fn new(
+        bump: &'a Bump,
         entries: &'a IndexMap<String, ServerEntry>,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
@@ -39,6 +48,7 @@ impl<'a> ServersList<'a> {
             selected: 0,
             scroll: 0,
             terminal_interface_config,
+            bump,
         }
     }
 
@@ -58,13 +68,16 @@ impl<'a> ServersList<'a> {
     }
 
     fn accumulate(
-        entries: &'a IndexMap<String, ServerEntry>,
-        accumulator: &mut Vec<Line<'a>>,
+        BorrowedAccumulationValues {
+            bump,
+            entries,
+            terminal_interface_config,
+        }: BorrowedAccumulationValues<'a>,
+        accumulator: &mut bumpalo::collections::Vec<Line<'a>>,
         base_indentation: &str,
         counter: &mut usize,
         attached: Option<usize>,
         selected: usize,
-        ti_cfg: &'a TerminalInterfaceConfig,
     ) {
         for (idx, (name, entry)) in entries.iter().enumerate() {
             const CONTINUATION: &str = "├╴";
@@ -76,7 +89,8 @@ impl<'a> ServersList<'a> {
             let spans = match (is_selected, is_last) {
                 (true, last) => {
                     let trimmed_indentation = if let Some(ch) = base_indentation.chars().next() {
-                        format!(
+                        bumpalo::format!(
+                            in bump,
                             "{}{}",
                             &base_indentation[ch.len_utf8()..],
                             if last { END } else { CONTINUATION }
@@ -85,39 +99,53 @@ impl<'a> ServersList<'a> {
                         if last { END } else { CONTINUATION }
                             .chars()
                             .skip(1)
-                            .collect::<String>()
+                            .collect_in::<bumpalo::collections::String>(bump)
                     };
 
-                    vec!["❯".to_span(), Span::from(trimmed_indentation)]
+                    bumpalo::vec![
+                        in bump;
+                        "❯".to_span(),
+                        Span::from(trimmed_indentation.into_bump_str()),
+                    ]
                 }
                 (false, true) => {
-                    vec![Span::from(format!("{base_indentation}{END}"))]
+                    let s = bumpalo::format!(in bump, "{}{}", base_indentation, END);
+                    bumpalo::vec![in bump; Span::from(s.into_bump_str())]
                 }
                 (false, false) => {
-                    vec![Span::from(format!("{base_indentation}{CONTINUATION}"))]
+                    let s = bumpalo::format!(in bump, "{}{}", base_indentation, CONTINUATION);
+                    bumpalo::vec![in bump; Span::from(s.into_bump_str())]
                 }
             };
 
             match entry {
                 ServerEntry::Group(server_group) => {
-                    let line = server_group.fold_to_line(name, spans, is_selected, ti_cfg);
+                    let line = server_group.fold_to_line(
+                        name,
+                        spans,
+                        is_selected,
+                        terminal_interface_config,
+                    );
 
                     accumulator.push(line);
                     *counter += 1;
 
                     if server_group.expanded {
                         Self::accumulate(
-                            &server_group.children,
+                            BorrowedAccumulationValues {
+                                bump,
+                                entries: &server_group.children,
+                                terminal_interface_config,
+                            },
                             accumulator,
                             &if is_last {
-                                format!("{base_indentation}    ")
+                                bumpalo::format!(in bump, "{}    ", base_indentation)
                             } else {
-                                format!("{base_indentation}│   ")
+                                bumpalo::format!(in bump, "{}│   ", base_indentation)
                             },
                             counter,
                             attached,
                             selected,
-                            ti_cfg,
                         );
                     }
                 }
@@ -128,7 +156,7 @@ impl<'a> ServersList<'a> {
                         spans,
                         attached == Some(*counter),
                         is_selected,
-                        ti_cfg,
+                        terminal_interface_config,
                     );
 
                     accumulator.push(line);
@@ -145,18 +173,20 @@ impl Widget for ServersList<'_> {
     where
         Self: Sized,
     {
-        let mut lines = vec![];
-
+        let mut lines: bumpalo::collections::Vec<Line<'_>> = bumpalo::vec![in self.bump];
         let mut counter = 0;
 
         Self::accumulate(
-            self.entries,
+            BorrowedAccumulationValues {
+                bump: self.bump,
+                entries: self.entries,
+                terminal_interface_config: self.terminal_interface_config,
+            },
             &mut lines,
             "",
             &mut counter,
             self.attached,
             self.selected,
-            self.terminal_interface_config,
         );
 
         let list = List::new(lines.into_iter().skip(self.scroll))
@@ -414,6 +444,7 @@ impl<'a> Widget for Create<'a> {
 pub struct Delete<'a> {
     delete_state: &'a DeleteState,
     blinking: bool,
+    bump: &'a Bump,
     terminal_interface_config: &'a TerminalInterfaceConfig,
 }
 
@@ -421,11 +452,13 @@ impl<'a> Delete<'a> {
     pub fn new(
         delete_state: &'a DeleteState,
         blinking: bool,
+        bump: &'a Bump,
         terminal_interface_config: &'a TerminalInterfaceConfig,
     ) -> Self {
         Self {
             delete_state,
             blinking,
+            bump,
             terminal_interface_config,
         }
     }
@@ -439,14 +472,17 @@ impl Widget for Delete<'_> {
         let Self {
             delete_state,
             blinking,
+            bump,
             terminal_interface_config,
         } = self;
 
         let input = Input::new(
-            format!(
+            bumpalo::format!(
+                in bump,
                 "Type `{}` to delete {}",
                 delete_state.name, delete_state.entry_type
-            ),
+            )
+            .into_bump_str(),
             &delete_state.confirmation,
             delete_state.name.as_str(),
         )
