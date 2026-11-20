@@ -1665,6 +1665,7 @@ dependencies = [
  "ratatui",
  "reqwest",
  "serde",
+ "serde_json",
  "shellexpand",
  "tempfile",
  "tokio",
