@@ -10,13 +10,13 @@ use crate::crud::{
 };
 
 #[derive(Debug, Deserialize)]
-struct FabricEntry {
+pub struct FabricEntry {
     version: String,
     stable: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct FabricVersions {
+pub struct FabricVersions {
     game: Vec<FabricEntry>,
     loader: Vec<FabricEntry>,
     installer: Vec<FabricEntry>,

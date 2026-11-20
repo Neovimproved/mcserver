@@ -20,10 +20,6 @@ pub use version::Version;
 pub enum ServerSoftwareType {
     #[display("fabric")]
     Fabric,
-    #[display("forge")]
-    Forge,
-    #[display("neoforge")]
-    NeoForge,
     #[display("paper")]
     Paper,
     #[display("purpur")]
@@ -39,8 +35,6 @@ impl FromStr for ServerSoftwareType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(match s {
             "fabric" => Self::Fabric,
-            "forge" => Self::Forge,
-            "neoforge" => Self::NeoForge,
             "paper" => Self::Paper,
             "purpur" => Self::Purpur,
             "vanilla" => Self::Vanilla,

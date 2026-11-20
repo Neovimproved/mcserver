@@ -98,8 +98,6 @@ impl SoftwareResolver for DefaultSoftwareResolver {
                     .create_jar(version, server_dir)
                     .await
             }
-            ServerSoftwareType::Forge => todo!(),
-            ServerSoftwareType::NeoForge => todo!(),
             ServerSoftwareType::Paper => {
                 Paper::from(base_url::PAPER)
                     .create_jar(version, server_dir)
@@ -328,6 +326,9 @@ mod test {
     //     matchers::{method, path},
     // };
 
+    use serde_json::json;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
     use crate::{
         crud::fabric::Fabric,
         metadata::LastUsed,
@@ -339,7 +340,17 @@ mod test {
     // TODO: use wiremock for some tests
 
     #[derive(Debug)]
-    struct MockingResolver;
+    struct MockingResolver {
+        mock_server: MockServer,
+    }
+
+    impl MockingResolver {
+        async fn new() -> Self {
+            Self {
+                mock_server: MockServer::start().await,
+            }
+        }
+    }
 
     impl SoftwareResolver for MockingResolver {
         async fn resolve(
@@ -350,12 +361,78 @@ mod test {
         ) -> Result<String> {
             match server_software {
                 ServerSoftwareType::Fabric => {
-                    Fabric::from(base_url::FABRIC)
+                    let json = json!({
+                        "game": [
+                            {
+                                "version": "26.4-snapshot-2",
+                                "stable": false
+                            },
+                            {
+                                "version": "26.4-snapshot-1",
+                                "stable": false
+                            },
+                            {
+                                "version": "26.3",
+                                "stable": true
+                            },
+                            {
+                                "version": "26.3-rc-3",
+                                "stable": false
+                            },
+                            {
+                                "version": "26.3-rc-2",
+                                "stable": false
+                            }
+                        ],
+
+                        "loader": [
+                            {
+                                "separator": ".",
+                                "build": 1,
+                                "maven": "net.fabricmc:fabric-loader:0.20.1",
+                                "version": "0.20.1",
+                                "stable": true,
+                            },
+                            {
+                                "separator": ".",
+                                "build": 0,
+                                "maven": "net.fabricmc:fabric-loader:0.20.0",
+                                "version": "0.20.0",
+                                "stable": false
+                            }
+                        ],
+
+                        "installer": [
+                            {
+                                "url": "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.2/fabric-installer-1.1.2.jar",
+                                "maven": "net.fabricmc:fabric-installer:1.1.2",
+                                "version": "1.1.2",
+                                "stable": true,
+                            },
+                            {
+                                "url": "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.1/fabric-installer-1.1.1.jar",
+                                "maven": "net.fabricmc:fabric-installer:1.1.1",
+                                "version": "1.1.1",
+                                "stable": false,
+                            },
+                            {
+                                "url": "https://maven.fabricmc.net/net/fabricmc/fabric-installer/1.1.0/fabric-installer-1.1.0.jar",
+                                "maven": "net.fabricmc:fabric-installer:1.1.0",
+                                "version": "1.1.0",
+                                "stable": false,
+                            }
+                        ]
+                    });
+
+                    Mock::given(method("GET"))
+                        .respond_with(ResponseTemplate::new(200).set_body_json(json))
+                        .mount(&self.mock_server)
+                        .await;
+
+                    Fabric::from(self.mock_server.uri())
                         .create_jar(version, server_dir)
                         .await
                 }
-                ServerSoftwareType::Forge => todo!(),
-                ServerSoftwareType::NeoForge => todo!(),
                 ServerSoftwareType::Paper => {
                     Paper::from(base_url::PAPER)
                         .create_jar(version, server_dir)
@@ -368,6 +445,7 @@ mod test {
     }
 
     async fn create_test(server_software: ServerSoftwareType) -> Result<()> {
+        // TODO: remove once tests work
         if true {
             return Ok(());
         }
@@ -379,7 +457,7 @@ mod test {
         let path = "foo/bar".into();
 
         let (server_dir, _metadata_dir) = Creator {
-            resolver: MockingResolver,
+            resolver: MockingResolver::new().await,
         }
         .build(
             config,
@@ -456,8 +534,6 @@ mod test {
     #[tokio::test]
     async fn test_default_path_softwares() -> Result<()> {
         test_default_path(ServerSoftwareType::Fabric).await?;
-        test_default_path(ServerSoftwareType::Forge).await?;
-        test_default_path(ServerSoftwareType::NeoForge).await?;
         test_default_path(ServerSoftwareType::Paper).await?;
         test_default_path(ServerSoftwareType::Purpur).await?;
         test_default_path(ServerSoftwareType::Vanilla).await?;
