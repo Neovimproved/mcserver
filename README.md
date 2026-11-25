@@ -40,5 +40,5 @@ Create a file `config.kdl` in a configuration directory (e.g. `$XDG_CONFIG_HOME/
 
 ## Roadmap
 
-- [ ] Server creation
+- [x] Server creation
 - [x] Server deletion
