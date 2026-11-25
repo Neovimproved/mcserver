@@ -506,9 +506,6 @@ impl App {
                 match key.code {
                     KeyCode::Enter => self.try_select(writer).await?,
 
-                    KeyCode::Up | KeyCode::Char('k') => self.selection_up(),
-                    KeyCode::Down | KeyCode::Char('j') => self.selection_down(),
-
                     KeyCode::Tab => console.state.reset(),
 
                     KeyCode::BackTab => self.selection_mode(),
@@ -518,7 +515,8 @@ impl App {
                     }
 
                     KeyCode::Esc => self.selection_mode(),
-                    _ => {}
+
+                    _ => self.list_motion(key, writer).await?,
                 }
             }
 
